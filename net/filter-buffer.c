@@ -15,10 +15,15 @@
 #include "qapi/qapi-builtin-visit.h"
 #include "qapi/qmp/qerror.h"
 #include "qom/object.h"
+#include "migration/colo.h"
 
 #define TYPE_FILTER_BUFFER "filter-buffer"
 
 OBJECT_DECLARE_SIMPLE_TYPE(FilterBufferState, FILTER_BUFFER)
+
+#define TYPE_FILTER_BUFFER_COLO "filter-buffer-colo"
+DECLARE_INSTANCE_CHECKER(FilterBufferState, FILTER_BUFFER_COLO,
+                         TYPE_FILTER_BUFFER_COLO)
 
 struct FilterBufferState {
     NetFilterState parent_obj;
@@ -193,9 +198,52 @@ static const TypeInfo filter_buffer_info = {
     .instance_size = sizeof(FilterBufferState),
 };
 
+static void filter_buffer_colo_event(NetFilterState *nf, int event,
+                                     Error **errp)
+{
+    switch (event) {
+    case COLO_EVENT_CHECKPOINT:
+        filter_buffer_flush(nf);
+        break;
+    case COLO_EVENT_FAILOVER:
+        filter_buffer_flush(nf);
+        object_property_set_str(OBJECT(nf), "status", "off", errp);
+        break;
+    default:
+        break;
+    }
+}
+
+static void filter_buffer_colo_setup(NetFilterState *nf, Error **errp)
+{
+    FilterBufferState *s = FILTER_BUFFER_COLO(nf);
+
+    s->incoming_queue = qemu_new_net_queue(qemu_netfilter_pass_to_next, nf);
+    s->interval = 0;
+}
+
+static void filter_buffer_colo_class_init(ObjectClass *oc, void *data)
+{
+    NetFilterClass *nfc = NETFILTER_CLASS(oc);
+
+    nfc->setup = filter_buffer_colo_setup;
+    nfc->cleanup = filter_buffer_cleanup;
+    nfc->receive_iov = filter_buffer_receive_iov;
+    nfc->status_changed = filter_buffer_status_changed;
+    nfc->handle_event = filter_buffer_colo_event;
+}
+
+static const TypeInfo filter_buffer_colo_info = {
+    .name = TYPE_FILTER_BUFFER_COLO,
+    .parent = TYPE_NETFILTER,
+    .class_init = filter_buffer_colo_class_init,
+    .instance_size = sizeof(FilterBufferState),
+};
+
 static void register_types(void)
 {
     type_register_static(&filter_buffer_info);
+    type_register_static(&filter_buffer_colo_info);
 }
 
 type_init(register_types);
