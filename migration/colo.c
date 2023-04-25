@@ -496,6 +496,14 @@ static int colo_do_checkpoint_transaction(MigrationState *s,
     }
 
     qemu_event_reset(&s->colo_checkpoint_event);
+
+    qemu_mutex_lock_iothread();
+    colo_notify_filters_event(COLO_EVENT_CHECKPOINT, &local_err);
+    qemu_mutex_unlock_iothread();
+    if (local_err) {
+        goto out;
+    }
+
     colo_notify_compares_event(NULL, COLO_EVENT_CHECKPOINT, &local_err);
     if (local_err) {
         goto out;
