@@ -1820,7 +1820,8 @@ static bool object_create_early(const char *type)
     /*
      * Reason: filter-* property "netdev" etc.
      */
-    if (g_str_equal(type, "filter-buffer") ||
+    if (g_str_equal(type, "filter-drop") ||
+        g_str_equal(type, "filter-buffer") ||
         g_str_equal(type, "filter-dump") ||
         g_str_equal(type, "filter-mirror") ||
         g_str_equal(type, "filter-redirector") ||
