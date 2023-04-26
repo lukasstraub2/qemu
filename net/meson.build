@@ -3,6 +3,7 @@ softmmu_ss.add(files(
   'checksum.c',
   'dump.c',
   'eth.c',
+  'filter-drop.c',
   'filter-buffer.c',
   'filter-mirror.c',
   'filter.c',
