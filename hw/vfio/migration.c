@@ -166,23 +166,6 @@ static int vfio_load_buffer(QEMUFile *f, VFIODevice *vbasedev,
     return ret;
 }
 
-static int vfio_save_device_config_state(QEMUFile *f, void *opaque)
-{
-    VFIODevice *vbasedev = opaque;
-
-    qemu_put_be64(f, VFIO_MIG_FLAG_DEV_CONFIG_STATE);
-
-    if (vbasedev->ops && vbasedev->ops->vfio_save_config) {
-        vbasedev->ops->vfio_save_config(vbasedev, f);
-    }
-
-    qemu_put_be64(f, VFIO_MIG_FLAG_END_OF_STATE);
-
-    trace_vfio_save_device_config_state(vbasedev->name);
-
-    return qemu_file_get_error(f);
-}
-
 static int vfio_load_device_config_state(QEMUFile *f, void *opaque)
 {
     VFIODevice *vbasedev = opaque;
@@ -351,7 +334,6 @@ static int vfio_save_complete_precopy(QEMUFile *f, void *opaque)
         }
     } while (!ret);
 
-    qemu_put_be64(f, VFIO_MIG_FLAG_END_OF_STATE);
     ret = qemu_file_get_error(f);
     if (ret) {
         return ret;
@@ -365,20 +347,23 @@ static int vfio_save_complete_precopy(QEMUFile *f, void *opaque)
                                    VFIO_DEVICE_STATE_ERROR);
     trace_vfio_save_complete_precopy(vbasedev->name, ret);
 
-    return ret;
-}
+    qemu_put_be64(f, VFIO_MIG_FLAG_DEV_CONFIG_STATE);
 
-static void vfio_save_state(QEMUFile *f, void *opaque)
-{
-    VFIODevice *vbasedev = opaque;
-    int ret;
+    if (vbasedev->ops && vbasedev->ops->vfio_save_config) {
+        vbasedev->ops->vfio_save_config(vbasedev, f);
+    }
 
-    ret = vfio_save_device_config_state(f, opaque);
+    qemu_put_be64(f, VFIO_MIG_FLAG_END_OF_STATE);
+
+    trace_vfio_save_device_config_state(vbasedev->name);
+
+    ret = qemu_file_get_error(f);
     if (ret) {
         error_report("%s: Failed to save device config space",
                      vbasedev->name);
-        qemu_file_set_error(f, ret);
     }
+
+    return ret;
 }
 
 static int vfio_load_setup(QEMUFile *f, void *opaque)
@@ -458,7 +443,6 @@ static const SaveVMHandlers savevm_vfio_handlers = {
     .save_cleanup = vfio_save_cleanup,
     .state_pending_exact = vfio_state_pending_exact,
     .save_live_complete_precopy = vfio_save_complete_precopy,
-    .save_state = vfio_save_state,
     .load_setup = vfio_load_setup,
     .load_cleanup = vfio_load_cleanup,
     .load_state = vfio_load_state,
