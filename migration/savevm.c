@@ -774,6 +774,8 @@ int register_savevm_live(const char *idstr,
         se->is_ram = 1;
     }
 
+    assert(!(se->ops->save_setup && se->ops->save_state));
+
     pstrcat(se->idstr, sizeof(se->idstr), idstr);
 
     if (instance_id == VMSTATE_INSTANCE_ID_ANY) {
