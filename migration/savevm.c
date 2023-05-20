@@ -1186,6 +1186,20 @@ bool qemu_savevm_state_blocked(Error **errp)
                        se->idstr);
             return true;
         }
+
+        if (se->ops && se->ops->save_setup && migrate_colo()) {
+            if (!strcmp(se->idstr, "ram")) {
+                continue;
+            }
+
+            if (se->ops->is_active && !se->ops->is_active(se->opaque)) {
+                continue;
+            }
+
+            error_setg(errp, "COLO doesn't support iterable device '%s'",
+                       se->idstr);
+            return true;
+        }
     }
     return false;
 }
