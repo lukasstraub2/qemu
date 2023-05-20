@@ -35,8 +35,9 @@ void colo_do_failover(void);
 /*
  * colo_checkpoint_delay_set
  *
- * Handles change of x-checkpoint-delay migration parameter, called from
- * migrate_params_apply() to notify COLO module about the change.
+ * Handles change of x-checkpoint-delay and x-dirty-check-delay migration
+ * parameters, called from migrate_params_apply() to notify COLO module about
+ * the change.
  */
 void colo_checkpoint_delay_set(void);
 

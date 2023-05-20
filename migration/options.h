@@ -68,6 +68,8 @@ bool migrate_has_block_bitmap_mapping(void);
 
 bool migrate_block_incremental(void);
 uint32_t migrate_checkpoint_delay(void);
+uint32_t migrate_dirty_check_delay(void);
+uint64_t migrate_dirty_threshold(void);
 int migrate_compress_level(void);
 int migrate_compress_threads(void);
 int migrate_compress_wait_thread(void);

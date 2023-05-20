@@ -68,16 +68,31 @@ static void colo_checkpoint_notify(void *opaque)
     MigrationState *s = opaque;
     int64_t next_notify_time;
 
+    qatomic_inc(&s->colo_checkpoint_request);
     qemu_event_set(&s->colo_checkpoint_event);
     s->colo_checkpoint_time = qemu_clock_get_ms(QEMU_CLOCK_HOST);
     next_notify_time = s->colo_checkpoint_time + migrate_checkpoint_delay();
     timer_mod(s->colo_delay_timer, next_notify_time);
 }
 
+static void colo_dirty_check_notify(void *opaque)
+{
+    MigrationState *s = opaque;
+    int64_t next_notify_time;
+
+    qemu_event_set(&s->colo_checkpoint_event);
+    next_notify_time = qemu_clock_get_ms(QEMU_CLOCK_HOST) +
+                       s->parameters.x_dirty_check_delay;
+    timer_mod(s->colo_dirty_check_timer, next_notify_time);
+}
+
 void colo_checkpoint_delay_set(void)
 {
+    MigrationState *s = migrate_get_current();
+
     if (migration_in_colo_state()) {
-        colo_checkpoint_notify(migrate_get_current());
+        colo_checkpoint_notify(s);
+        colo_dirty_check_notify(s);
     }
 }
 
@@ -526,6 +541,18 @@ static void colo_compare_notify_checkpoint(Notifier *notifier, void *data)
     colo_checkpoint_notify(data);
 }
 
+static bool colo_need_migrate_ram_background(MigrationState *s)
+{
+    uint64_t pending_size, pend_pre, pend_post;
+    uint64_t threshold = s->parameters.x_dirty_threshold;
+
+    qemu_savevm_state_pending_exact(&pend_pre, &pend_post);
+    pending_size = pend_pre + pend_post;
+
+    trace_colo_need_migrate_ram_background(pending_size);
+    return (pending_size >= threshold);
+}
+
 static void colo_process_checkpoint(MigrationState *s)
 {
     QIOChannelBuffer *bioc;
@@ -576,6 +603,8 @@ static void colo_process_checkpoint(MigrationState *s)
 
     timer_mod(s->colo_delay_timer, qemu_clock_get_ms(QEMU_CLOCK_HOST) +
               migrate_checkpoint_delay());
+    timer_mod(s->colo_dirty_check_timer, qemu_clock_get_ms(QEMU_CLOCK_HOST) +
+              migrate_dirty_check_delay());
 
     while (s->state == MIGRATION_STATUS_COLO) {
         if (failover_get_state() != FAILOVER_STATUS_NONE) {
@@ -588,9 +617,32 @@ static void colo_process_checkpoint(MigrationState *s)
         if (s->state != MIGRATION_STATUS_COLO) {
             goto out;
         }
-        ret = colo_do_checkpoint_transaction(s, bioc, fb);
-        if (ret < 0) {
-            goto out;
+        if (qatomic_xchg(&s->colo_checkpoint_request, 0)) {
+            /* start a colo checkpoint */
+            ret = colo_do_checkpoint_transaction(s, bioc, fb);
+            if (ret < 0) {
+                goto out;
+            }
+        } else {
+            if (colo_need_migrate_ram_background(s)) {
+                colo_send_message(s->to_dst_file,
+                                  COLO_MESSAGE_MIGRATE_RAM_BACKGROUND,
+                                  &local_err);
+                if (local_err) {
+                    goto out;
+                }
+
+                qemu_savevm_state_iterate(s->to_dst_file, false);
+                qemu_put_byte(s->to_dst_file, QEMU_VM_EOF);
+                ret = qemu_file_get_error(s->to_dst_file);
+                if (ret < 0) {
+                    error_setg_errno(&local_err, -ret,
+                        "Failed to send dirty pages backgroud");
+                    goto out;
+                }
+            } else {
+                qemu_event_reset(&s->colo_checkpoint_event);
+            }
         }
     }
 
@@ -630,6 +682,7 @@ out:
      */
     colo_compare_unregister_notifier(&packets_compare_notifier);
     timer_free(s->colo_delay_timer);
+    timer_free(s->colo_dirty_check_timer);
     qemu_event_destroy(&s->colo_checkpoint_event);
 
     /*
@@ -647,8 +700,11 @@ void migrate_start_colo_process(MigrationState *s)
 {
     qemu_mutex_unlock_iothread();
     qemu_event_init(&s->colo_checkpoint_event, false);
+    s->colo_checkpoint_request = 0;
     s->colo_delay_timer =  timer_new_ms(QEMU_CLOCK_HOST,
                                 colo_checkpoint_notify, s);
+    s->colo_dirty_check_timer = timer_new_ms(QEMU_CLOCK_HOST,
+                                    colo_dirty_check_notify, s);
 
     qemu_sem_init(&s->colo_exit_sem, 0);
     colo_process_checkpoint(s);
@@ -791,6 +847,11 @@ static void colo_wait_handle_message(MigrationIncomingState *mis,
     switch (msg) {
     case COLO_MESSAGE_CHECKPOINT_REQUEST:
         colo_incoming_process_checkpoint(mis, fb, bioc, errp);
+        break;
+    case COLO_MESSAGE_MIGRATE_RAM_BACKGROUND:
+        if (qemu_loadvm_state_main(mis->from_src_file, mis) < 0) {
+            error_setg(errp, "Load ram background failed");
+        }
         break;
     default:
         error_setg(errp, "Got unknown COLO message: %d", msg);

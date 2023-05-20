@@ -346,8 +346,10 @@ struct MigrationState {
 
     /* The event is used to notify COLO thread to do checkpoint */
     QemuEvent colo_checkpoint_event;
+    int colo_checkpoint_request;
     int64_t colo_checkpoint_time;
     QEMUTimer *colo_delay_timer;
+    QEMUTimer *colo_dirty_check_timer;
 
     /* The first error that has occurred.
        We used the mutex to be able to return the 1st error message */

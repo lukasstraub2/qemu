@@ -723,8 +723,14 @@
 # @downtime-limit: set maximum tolerated downtime for migration.
 #     maximum downtime in milliseconds (Since 2.8)
 #
-# @x-checkpoint-delay: The delay time (in ms) between two COLO
-#     checkpoints in periodic mode.  (Since 2.8)
+# @x-checkpoint-delay: The interval (in ms) to do periodic COLO
+#     checkpoints.  (Since 2.8)
+#
+# @x-dirty-check-delay: The interval (in ms) to check for
+#     dirty ram pages in COLO. (Since 8.1)
+#
+# @x-dirty-threshold: The threshold of dirty ram (in bytes) for when
+#     to trigger background ram migration in COLO. (Since 8.1)
 #
 # @block-incremental: Affects how much storage is migrated when the
 #     block migration capability is enabled.  When false, the entire
@@ -781,7 +787,8 @@
 #
 # Features:
 #
-# @unstable: Member @x-checkpoint-delay is experimental.
+# @unstable: Members @x-checkpoint-delay, @x-check-dirty-delay
+#            @x-dirty-threshold are experimental.
 #
 # Since: 2.4
 ##
@@ -795,6 +802,8 @@
            'tls-creds', 'tls-hostname', 'tls-authz', 'max-bandwidth',
            'downtime-limit',
            { 'name': 'x-checkpoint-delay', 'features': [ 'unstable' ] },
+           { 'name': 'x-dirty-check-delay', 'features': [ 'unstable' ] },
+           { 'name': 'x-dirty-threshold', 'features': [ 'unstable' ] },
            'block-incremental',
            'multifd-channels',
            'xbzrle-cache-size', 'max-postcopy-bandwidth',
@@ -879,8 +888,14 @@
 # @downtime-limit: set maximum tolerated downtime for migration.
 #     maximum downtime in milliseconds (Since 2.8)
 #
-# @x-checkpoint-delay: the delay time between two COLO checkpoints.
-#     (Since 2.8)
+# @x-checkpoint-delay: The interval (in ms) to do periodic COLO
+#     checkpoints.  (Since 2.8)
+#
+# @x-dirty-check-delay: The interval (in ms) to check for
+#     dirty ram pages in COLO. (Since 8.1)
+#
+# @x-dirty-threshold: The threshold of dirty ram (in bytes) for when
+#     to trigger background ram migration in COLO. (Since 8.1)
 #
 # @block-incremental: Affects how much storage is migrated when the
 #     block migration capability is enabled.  When false, the entire
@@ -937,7 +952,8 @@
 #
 # Features:
 #
-# @unstable: Member @x-checkpoint-delay is experimental.
+# @unstable: Members @x-checkpoint-delay, @x-check-dirty-delay and
+#            @x-check-dirty-threshold are experimental.
 #
 # TODO: either fuse back into MigrationParameters, or make
 #     MigrationParameters members mandatory
@@ -964,6 +980,10 @@
             '*downtime-limit': 'uint64',
             '*x-checkpoint-delay': { 'type': 'uint32',
                                      'features': [ 'unstable' ] },
+            '*x-dirty-check-delay': { 'type': 'uint32',
+                                     'features': [ 'unstable' ] },
+            '*x-dirty-threshold': { 'type': 'uint64',
+                                          'features': [ 'unstable' ] },
             '*block-incremental': 'bool',
             '*multifd-channels': 'uint8',
             '*xbzrle-cache-size': 'size',
@@ -1071,8 +1091,14 @@
 # @downtime-limit: set maximum tolerated downtime for migration.
 #     maximum downtime in milliseconds (Since 2.8)
 #
-# @x-checkpoint-delay: the delay time between two COLO checkpoints.
-#     (Since 2.8)
+# @x-checkpoint-delay: The interval (in ms) to do periodic COLO
+#     checkpoints.  (Since 2.8)
+#
+# @x-dirty-check-delay: The interval (in ms) to check for
+#     dirty ram pages in COLO. (Since 8.1)
+#
+# @x-dirty-threshold: The threshold of dirty ram (in bytes) for when
+#     to trigger background ram migration in COLO. (Since 8.1)
 #
 # @block-incremental: Affects how much storage is migrated when the
 #     block migration capability is enabled.  When false, the entire
@@ -1129,7 +1155,8 @@
 #
 # Features:
 #
-# @unstable: Member @x-checkpoint-delay is experimental.
+# @unstable: Members @x-checkpoint-delay, @x-check-dirty-delay and
+#            @x-check-dirty-threshold are experimental.
 #
 # Since: 2.4
 ##
@@ -1153,6 +1180,10 @@
             '*downtime-limit': 'uint64',
             '*x-checkpoint-delay': { 'type': 'uint32',
                                      'features': [ 'unstable' ] },
+            '*x-dirty-check-delay': { 'type': 'uint32',
+                                     'features': [ 'unstable' ] },
+            '*x-dirty-threshold': { 'type': 'uint64',
+                                          'features': [ 'unstable' ] },
             '*block-incremental': 'bool',
             '*multifd-channels': 'uint8',
             '*xbzrle-cache-size': 'size',
@@ -1261,12 +1292,15 @@
 #
 # @vmstate-loaded: VM's state has been loaded by SVM.
 #
+# @migrate-ram-background: Send dirty ram while the guest is running.
+#                          (Since 8.1)
+#
 # Since: 2.8
 ##
 { 'enum': 'COLOMessage',
   'data': [ 'checkpoint-ready', 'checkpoint-request', 'checkpoint-reply',
             'vmstate-send', 'vmstate-size', 'vmstate-received',
-            'vmstate-loaded' ] }
+            'vmstate-loaded', 'migrate-ram-background' ] }
 
 ##
 # @COLOMode:

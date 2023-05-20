@@ -56,6 +56,8 @@
 
 /* The delay time (in ms) between two COLO checkpoints */
 #define DEFAULT_MIGRATE_X_CHECKPOINT_DELAY (200 * 100)
+#define DEFAULT_MIGRATE_X_DIRTY_CHECK_DELAY 1000
+#define DEFAULT_MIGRATE_X_DIRTY_THRESHOLD (100 * 1024 * 1024UL)
 #define DEFAULT_MIGRATE_MULTIFD_CHANNELS 2
 #define DEFAULT_MIGRATE_MULTIFD_COMPRESSION MULTIFD_COMPRESSION_NONE
 /* 0: means nocompress, 1: best speed, ... 9: best compress ratio */
@@ -127,6 +129,12 @@ Property migration_properties[] = {
     DEFINE_PROP_UINT32("x-checkpoint-delay", MigrationState,
                       parameters.x_checkpoint_delay,
                       DEFAULT_MIGRATE_X_CHECKPOINT_DELAY),
+    DEFINE_PROP_UINT32("x-dirty-check-delay", MigrationState,
+                      parameters.x_dirty_check_delay,
+                      DEFAULT_MIGRATE_X_DIRTY_CHECK_DELAY),
+    DEFINE_PROP_UINT64("x-dirty-threshold", MigrationState,
+                      parameters.x_dirty_threshold,
+                      DEFAULT_MIGRATE_X_DIRTY_THRESHOLD),
     DEFINE_PROP_UINT8("multifd-channels", MigrationState,
                       parameters.multifd_channels,
                       DEFAULT_MIGRATE_MULTIFD_CHANNELS),
@@ -662,6 +670,20 @@ uint32_t migrate_checkpoint_delay(void)
     return s->parameters.x_checkpoint_delay;
 }
 
+uint32_t migrate_dirty_check_delay(void)
+{
+    MigrationState *s = migrate_get_current();
+
+    return s->parameters.x_dirty_check_delay;
+}
+
+uint64_t migrate_dirty_threshold(void)
+{
+    MigrationState *s = migrate_get_current();
+
+    return s->parameters.x_dirty_threshold;
+}
+
 int migrate_compress_level(void)
 {
     MigrationState *s = migrate_get_current();
@@ -873,6 +895,10 @@ MigrationParameters *qmp_query_migrate_parameters(Error **errp)
     params->downtime_limit = s->parameters.downtime_limit;
     params->has_x_checkpoint_delay = true;
     params->x_checkpoint_delay = s->parameters.x_checkpoint_delay;
+    params->has_x_dirty_check_delay = true;
+    params->x_dirty_check_delay = s->parameters.x_dirty_check_delay;
+    params->has_x_dirty_threshold = true;
+    params->x_dirty_threshold = s->parameters.x_dirty_threshold;
     params->has_block_incremental = true;
     params->block_incremental = s->parameters.block_incremental;
     params->has_multifd_channels = true;
@@ -925,6 +951,8 @@ void migrate_params_init(MigrationParameters *params)
     params->has_max_bandwidth = true;
     params->has_downtime_limit = true;
     params->has_x_checkpoint_delay = true;
+    params->has_x_dirty_check_delay = true;
+    params->has_x_dirty_threshold = true;
     params->has_block_incremental = true;
     params->has_multifd_channels = true;
     params->has_multifd_compression = true;
@@ -1160,6 +1188,12 @@ static void migrate_params_test_apply(MigrateSetParameters *params,
     if (params->has_x_checkpoint_delay) {
         dest->x_checkpoint_delay = params->x_checkpoint_delay;
     }
+    if (params->has_x_dirty_check_delay) {
+        dest->x_dirty_check_delay = params->x_dirty_check_delay;
+    }
+    if (params->has_x_dirty_threshold) {
+        dest->x_dirty_threshold = params->x_dirty_threshold;
+    }
 
     if (params->has_block_incremental) {
         dest->block_incremental = params->block_incremental;
@@ -1267,7 +1301,15 @@ static void migrate_params_apply(MigrateSetParameters *params, Error **errp)
 
     if (params->has_x_checkpoint_delay) {
         s->parameters.x_checkpoint_delay = params->x_checkpoint_delay;
+    }
+    if (params->has_x_dirty_check_delay) {
+        s->parameters.x_dirty_check_delay = params->x_dirty_check_delay;
+    }
+    if (params->has_x_dirty_check_delay || params->has_x_checkpoint_delay) {
         colo_checkpoint_delay_set();
+    }
+    if (params->has_x_dirty_threshold) {
+        s->parameters.x_dirty_threshold = params->x_dirty_threshold;
     }
 
     if (params->has_block_incremental) {
