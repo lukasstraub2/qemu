@@ -545,6 +545,7 @@ static void colo_process_checkpoint(MigrationState *s)
         error_report("Open QEMUFile from_dst_file failed");
         goto out;
     }
+    qemu_file_set_delay(s->to_dst_file, false);
 
     packets_compare_notifier.notify = colo_compare_notify_checkpoint;
     colo_compare_register_notifier(&packets_compare_notifier);
@@ -849,6 +850,7 @@ static void *colo_process_incoming_thread(void *opaque)
      * set the fd back to blocked.
      */
     qemu_file_set_blocking(mis->from_src_file, true);
+    qemu_file_set_delay(mis->from_src_file, false);
 
     colo_incoming_start_dirty_log();
 
