@@ -3919,7 +3919,7 @@ static void colo_flush_threads_init(void) {
     }
 }
 
-void colo_flush_ram_cache(void) {
+void colo_flush_ram_cache_begin(void) {
     RAMBlock *block = NULL;
 
     memory_global_dirty_log_sync(false);
@@ -3942,12 +3942,21 @@ void colo_flush_ram_cache(void) {
             struct FlushParams *thread = &colo_flush_threads->threads[n];
             qemu_sem_post(&thread->sem);
         }
+    }
+}
 
+void colo_flush_ram_cache_wait(void) {
+    RAMBlock *block = NULL;
+
+    int num_threads = colo_flush_threads->num_threads;
+    if (num_threads != 0) {
         for (int n = 0; n < num_threads; n++) {
             struct FlushParams *thread = &colo_flush_threads->threads[n];
             qemu_sem_wait(&thread->wait_sem);
         }
     }
+
+    barrier();
 
     WITH_RCU_READ_LOCK_GUARD() {
         block = QLIST_FIRST_RCU(&ram_list.blocks);

@@ -783,17 +783,11 @@ static void colo_incoming_process_checkpoint(MigrationIncomingState *mis,
 
     qemu_mutex_lock_iothread();
     vmstate_loading = true;
-    colo_flush_ram_cache();
-    ret = qemu_load_device_state(fb);
-    if (ret < 0) {
-        error_setg(errp, "COLO: load device state failed");
-        vmstate_loading = false;
-        qemu_mutex_unlock_iothread();
-        return;
-    }
+    colo_flush_ram_cache_begin();
 
     replication_get_error_all(&local_err);
     if (local_err) {
+        colo_flush_ram_cache_wait();
         error_propagate(errp, local_err);
         vmstate_loading = false;
         qemu_mutex_unlock_iothread();
@@ -803,6 +797,7 @@ static void colo_incoming_process_checkpoint(MigrationIncomingState *mis,
     /* discard colo disk buffer */
     replication_do_checkpoint_all(&local_err);
     if (local_err) {
+        colo_flush_ram_cache_wait();
         error_propagate(errp, local_err);
         vmstate_loading = false;
         qemu_mutex_unlock_iothread();
@@ -813,6 +808,16 @@ static void colo_incoming_process_checkpoint(MigrationIncomingState *mis,
 
     if (local_err) {
         error_propagate(errp, local_err);
+        vmstate_loading = false;
+        qemu_mutex_unlock_iothread();
+        return;
+    }
+
+    colo_flush_ram_cache_wait();
+
+    ret = qemu_load_device_state(fb);
+    if (ret < 0) {
+        error_setg(errp, "COLO: load device state failed");
         vmstate_loading = false;
         qemu_mutex_unlock_iothread();
         return;
