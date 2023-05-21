@@ -732,6 +732,10 @@
 # @x-dirty-threshold: The threshold of dirty ram (in bytes) for when
 #     to trigger background ram migration in COLO. (Since 8.1)
 #
+# @x-colo-flush-threads: The number of threads to flush the colo
+#     cache in parallel. 0 means no threads are used.
+#     Default: 0. (Since 8.1)
+#
 # @block-incremental: Affects how much storage is migrated when the
 #     block migration capability is enabled.  When false, the entire
 #     storage backing chain is migrated into a flattened image at the
@@ -804,6 +808,7 @@
            { 'name': 'x-checkpoint-delay', 'features': [ 'unstable' ] },
            { 'name': 'x-dirty-check-delay', 'features': [ 'unstable' ] },
            { 'name': 'x-dirty-threshold', 'features': [ 'unstable' ] },
+           { 'name': 'x-colo-flush-threads', 'features': [ 'unstable' ] },
            'block-incremental',
            'multifd-channels',
            'xbzrle-cache-size', 'max-postcopy-bandwidth',
@@ -897,6 +902,10 @@
 # @x-dirty-threshold: The threshold of dirty ram (in bytes) for when
 #     to trigger background ram migration in COLO. (Since 8.1)
 #
+# @x-colo-flush-threads: The number of threads to flush the colo
+#     cache in parallel. 0 means no threads are used.
+#     Default: 0. (Since 8.1)
+#
 # @block-incremental: Affects how much storage is migrated when the
 #     block migration capability is enabled.  When false, the entire
 #     storage backing chain is migrated into a flattened image at the
@@ -984,6 +993,8 @@
                                      'features': [ 'unstable' ] },
             '*x-dirty-threshold': { 'type': 'uint64',
                                           'features': [ 'unstable' ] },
+            '*x-colo-flush-threads': { 'type': 'uint32',
+                                       'features': [ 'unstable' ] },
             '*block-incremental': 'bool',
             '*multifd-channels': 'uint8',
             '*xbzrle-cache-size': 'size',
@@ -1100,6 +1111,10 @@
 # @x-dirty-threshold: The threshold of dirty ram (in bytes) for when
 #     to trigger background ram migration in COLO. (Since 8.1)
 #
+# @x-colo-flush-threads: The number of threads to flush the colo
+#     cache in parallel. 0 means no threads are used.
+#     Default: 0. (Since 8.1)
+#
 # @block-incremental: Affects how much storage is migrated when the
 #     block migration capability is enabled.  When false, the entire
 #     storage backing chain is migrated into a flattened image at the
@@ -1184,6 +1199,8 @@
                                      'features': [ 'unstable' ] },
             '*x-dirty-threshold': { 'type': 'uint64',
                                           'features': [ 'unstable' ] },
+            '*x-colo-flush-threads': { 'type': 'uint32',
+                                       'features': [ 'unstable' ] },
             '*block-incremental': 'bool',
             '*multifd-channels': 'uint8',
             '*xbzrle-cache-size': 'size',
