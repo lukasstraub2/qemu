@@ -19,6 +19,7 @@
 #include "qemu/module.h"
 #include "net/colo.h"
 #include "migration/colo.h"
+#include "trace.h"
 
 static inline bool qemu_can_skip_netfilter(NetFilterState *nf)
 {
@@ -113,9 +114,10 @@ ssize_t qemu_netfilter_pass_to_next(NetClientState *sender,
         qemu_net_queue_send_iov(sender->peer->incoming_queue,
                                 sender, flags, iov, iovcnt, NULL);
     }
-
 out:
     /* no receiver, or sender been deleted */
+    trace_net_drop_packet("qemu_netfilter_pass_to_next",
+                          "no receiver or sender has been deleted");
     return iov_size(iov, iovcnt);
 }
 

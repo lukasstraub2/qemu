@@ -25,6 +25,7 @@
 #include "net/queue.h"
 #include "qemu/queue.h"
 #include "net/net.h"
+#include "trace.h"
 
 /* The delivery handler may only return zero if it will call
  * qemu_net_queue_flush() when it determines that it is once again able
@@ -100,6 +101,8 @@ static void qemu_net_queue_append(NetQueue *queue,
     NetPacket *packet;
 
     if (queue->nq_count >= queue->nq_maxlen && !sent_cb) {
+        trace_net_drop_packet(sender->name,
+                              "net_queue_append: queue size exceeded");
         return; /* drop if queue full and no callback */
     }
     packet = g_malloc(sizeof(NetPacket) + size);
@@ -125,6 +128,8 @@ void qemu_net_queue_append_iov(NetQueue *queue,
     int i;
 
     if (queue->nq_count >= queue->nq_maxlen && !sent_cb) {
+        trace_net_drop_packet(sender->name,
+                              "net_queue_append_iov: queue size exceeded");
         return; /* drop if queue full and no callback */
     }
     for (i = 0; i < iovcnt; i++) {
@@ -260,6 +265,7 @@ void qemu_net_queue_purge(NetQueue *queue, NetClientState *from)
 
     QTAILQ_FOREACH_SAFE(packet, &queue->packets, entry, next) {
         if (packet->sender == from) {
+            trace_net_drop_packet(from->name, "net_queue_purge");
             QTAILQ_REMOVE(&queue->packets, packet, entry);
             queue->nq_count--;
             if (packet->sent_cb) {

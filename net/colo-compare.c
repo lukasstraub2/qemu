@@ -284,6 +284,8 @@ static int packet_enqueue(CompareState *s, int mode, Connection **con)
     if (!ret) {
         trace_colo_compare_drop_packet(colo_mode[mode],
             "queue size too big, drop packet");
+        trace_net_drop_packet(colo_mode[mode],
+             "colo-compare queue size too big");
         packet_destroy(pkt, NULL);
         pkt = NULL;
     }
