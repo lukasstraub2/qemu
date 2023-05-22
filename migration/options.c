@@ -124,6 +124,8 @@ Property migration_properties[] = {
     DEFINE_PROP_UINT64("x-downtime-limit", MigrationState,
                       parameters.downtime_limit,
                       DEFAULT_MIGRATE_SET_DOWNTIME),
+    DEFINE_PROP_BOOL("x-colo-periodic", MigrationState,
+                      parameters.x_colo_periodic, false),
     DEFINE_PROP_UINT32("x-checkpoint-delay", MigrationState,
                       parameters.x_checkpoint_delay,
                       DEFAULT_MIGRATE_X_CHECKPOINT_DELAY),
@@ -641,6 +643,12 @@ bool migrate_block_incremental(void)
     return s->parameters.block_incremental;
 }
 
+bool migrate_colo_periodic(void) {
+    MigrationState *s = migrate_get_current();
+
+    return s->parameters.x_colo_periodic;
+}
+
 uint32_t migrate_checkpoint_delay(void)
 {
     MigrationState *s = migrate_get_current();
@@ -857,6 +865,8 @@ MigrationParameters *qmp_query_migrate_parameters(Error **errp)
     params->max_bandwidth = s->parameters.max_bandwidth;
     params->has_downtime_limit = true;
     params->downtime_limit = s->parameters.downtime_limit;
+    params->has_x_colo_periodic = true;
+    params->x_colo_periodic = s->parameters.x_colo_periodic;
     params->has_x_checkpoint_delay = true;
     params->x_checkpoint_delay = s->parameters.x_checkpoint_delay;
     params->has_block_incremental = true;
@@ -910,6 +920,7 @@ void migrate_params_init(MigrationParameters *params)
     params->has_cpu_throttle_tailslow = true;
     params->has_max_bandwidth = true;
     params->has_downtime_limit = true;
+    params->x_colo_periodic = true;
     params->has_x_checkpoint_delay = true;
     params->has_block_incremental = true;
     params->has_multifd_channels = true;
@@ -1143,6 +1154,10 @@ static void migrate_params_test_apply(MigrateSetParameters *params,
         dest->downtime_limit = params->downtime_limit;
     }
 
+    if (params->has_x_colo_periodic) {
+        dest->x_colo_periodic = params->x_colo_periodic;
+    }
+
     if (params->has_x_checkpoint_delay) {
         dest->x_checkpoint_delay = params->x_checkpoint_delay;
     }
@@ -1249,6 +1264,10 @@ static void migrate_params_apply(MigrateSetParameters *params, Error **errp)
 
     if (params->has_downtime_limit) {
         s->parameters.downtime_limit = params->downtime_limit;
+    }
+
+    if (params->has_x_colo_periodic) {
+        s->parameters.x_colo_periodic = params->x_colo_periodic;
     }
 
     if (params->has_x_checkpoint_delay) {

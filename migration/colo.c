@@ -415,10 +415,12 @@ static int colo_do_checkpoint_transaction(MigrationState *s,
         goto out;
     }
 
-    colo_receive_check_message(s->rp_state.from_dst_file,
-                    COLO_MESSAGE_CHECKPOINT_REPLY, &local_err);
-    if (local_err) {
-        goto out;
+    if (!migrate_colo_periodic()) {
+        colo_receive_check_message(s->rp_state.from_dst_file,
+                                   COLO_MESSAGE_CHECKPOINT_REPLY, &local_err);
+        if (local_err) {
+            goto out;
+        }
     }
     /* Reset channel-buffer directly */
     qio_channel_io_seek(QIO_CHANNEL(bioc), 0, 0, NULL);
@@ -670,17 +672,20 @@ static void colo_incoming_process_checkpoint(MigrationIncomingState *mis,
     Error *local_err = NULL;
     int ret;
 
-    qemu_mutex_lock_iothread();
-    vm_stop_force_state(RUN_STATE_COLO);
-    qemu_mutex_unlock_iothread();
+    if (!migrate_colo_periodic()) {
+        qemu_mutex_lock_iothread();
+        vm_stop_force_state(RUN_STATE_COLO);
+        qemu_mutex_unlock_iothread();
+    }
     trace_colo_vm_state_change("run", "stop");
 
-    /* FIXME: This is unnecessary for periodic checkpoint mode */
-    colo_send_message(mis->to_src_file, COLO_MESSAGE_CHECKPOINT_REPLY,
-                 &local_err);
-    if (local_err) {
-        error_propagate(errp, local_err);
-        return;
+    if (!migrate_colo_periodic()) {
+        colo_send_message(mis->to_src_file, COLO_MESSAGE_CHECKPOINT_REPLY,
+                          &local_err);
+        if (local_err) {
+            error_propagate(errp, local_err);
+            return;
+        }
     }
 
     colo_receive_check_message(mis->from_src_file,
@@ -770,7 +775,9 @@ static void colo_incoming_process_checkpoint(MigrationIncomingState *mis,
     }
 
     vmstate_loading = false;
-    vm_start();
+    if (!migrate_colo_periodic()) {
+        vm_start();
+    }
     qemu_mutex_unlock_iothread();
     trace_colo_vm_state_change("stop", "run");
 
@@ -870,7 +877,9 @@ static void *colo_process_incoming_thread(void *opaque)
         qemu_mutex_unlock_iothread();
         goto out;
     }
-    vm_start();
+    if (!migrate_colo_periodic()) {
+        vm_start();
+    }
     qemu_mutex_unlock_iothread();
     trace_colo_vm_state_change("stop", "run");
 

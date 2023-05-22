@@ -723,6 +723,9 @@
 # @downtime-limit: set maximum tolerated downtime for migration.
 #     maximum downtime in milliseconds (Since 2.8)
 #
+# @x-colo-periodic: Enable COLO periodic mode. Currently this only
+#     leaves the guest stopped on the secondary side. (Since 8.1)
+#
 # @x-checkpoint-delay: The delay time (in ms) between two COLO
 #     checkpoints in periodic mode.  (Since 2.8)
 #
@@ -794,6 +797,7 @@
            'cpu-throttle-tailslow',
            'tls-creds', 'tls-hostname', 'tls-authz', 'max-bandwidth',
            'downtime-limit',
+           { 'name': 'x-colo-periodic', 'features': [ 'unstable' ] },
            { 'name': 'x-checkpoint-delay', 'features': [ 'unstable' ] },
            'block-incremental',
            'multifd-channels',
@@ -879,6 +883,9 @@
 # @downtime-limit: set maximum tolerated downtime for migration.
 #     maximum downtime in milliseconds (Since 2.8)
 #
+# @x-colo-periodic: Enable COLO periodic mode. Currently this only
+#     leaves the guest stopped on the secondary side. (Since 8.1)
+#
 # @x-checkpoint-delay: the delay time between two COLO checkpoints.
 #     (Since 2.8)
 #
@@ -962,6 +969,8 @@
             '*tls-authz': 'StrOrNull',
             '*max-bandwidth': 'size',
             '*downtime-limit': 'uint64',
+            '*x-colo-periodic': { 'type': 'bool',
+                                  'features': [ 'unstable' ] },
             '*x-checkpoint-delay': { 'type': 'uint32',
                                      'features': [ 'unstable' ] },
             '*block-incremental': 'bool',
@@ -1071,6 +1080,9 @@
 # @downtime-limit: set maximum tolerated downtime for migration.
 #     maximum downtime in milliseconds (Since 2.8)
 #
+# @x-colo-periodic: Enable COLO periodic mode. Currently this only
+#     leaves the guest stopped on the secondary side. (Since 8.1)
+#
 # @x-checkpoint-delay: the delay time between two COLO checkpoints.
 #     (Since 2.8)
 #
@@ -1151,6 +1163,8 @@
             '*tls-authz': 'str',
             '*max-bandwidth': 'size',
             '*downtime-limit': 'uint64',
+            '*x-colo-periodic': { 'type': 'bool',
+                                  'features': [ 'unstable' ] },
             '*x-checkpoint-delay': { 'type': 'uint32',
                                      'features': [ 'unstable' ] },
             '*block-incremental': 'bool',
