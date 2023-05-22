@@ -877,6 +877,11 @@ void qemu_file_set_blocking(QEMUFile *f, bool block)
     qio_channel_set_blocking(f->ioc, block, NULL);
 }
 
+void qemu_file_set_delay(QEMUFile *f, bool delay)
+{
+    qio_channel_set_delay(f->ioc, delay);
+}
+
 /*
  * qemu_file_get_ioc:
  *

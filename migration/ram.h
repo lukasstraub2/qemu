@@ -79,7 +79,8 @@ void *postcopy_preempt_thread(void *opaque);
 
 /* ram cache */
 int colo_init_ram_cache(void);
-void colo_flush_ram_cache(void);
+void colo_flush_ram_cache_begin(void);
+void colo_flush_ram_cache_wait(void);
 void colo_release_ram_cache(void);
 void colo_incoming_start_dirty_log(void);
 void colo_record_bitmap(RAMBlock *block, ram_addr_t *normal, uint32_t pages);

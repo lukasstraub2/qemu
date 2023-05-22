@@ -378,40 +378,6 @@ int migrate_send_rp_req_pages(MigrationIncomingState *mis,
     return migrate_send_rp_message_req_pages(mis, rb, start);
 }
 
-static bool migration_colo_enabled;
-bool migration_incoming_colo_enabled(void)
-{
-    return migration_colo_enabled;
-}
-
-void migration_incoming_disable_colo(void)
-{
-    ram_block_discard_disable(false);
-    migration_colo_enabled = false;
-}
-
-int migration_incoming_enable_colo(void)
-{
-#ifndef CONFIG_REPLICATION
-    error_report("ENABLE_COLO command come in migration stream, but COLO "
-                 "module is not built in");
-    return -ENOTSUP;
-#endif
-
-    if (!migrate_colo()) {
-        error_report("ENABLE_COLO command come in migration stream, but c-colo "
-                     "capability is not set");
-        return -EINVAL;
-    }
-
-    if (ram_block_discard_disable(true)) {
-        error_report("COLO: cannot disable RAM discard");
-        return -EBUSY;
-    }
-    migration_colo_enabled = true;
-    return 0;
-}
-
 void migrate_add_address(SocketAddress *address)
 {
     MigrationIncomingState *mis = migration_incoming_get_current();
@@ -488,8 +454,7 @@ static void process_incoming_migration_bh(void *opaque)
         } else {
             runstate_set(RUN_STATE_PAUSED);
         }
-    } else if (migration_incoming_colo_enabled()) {
-        migration_incoming_disable_colo();
+    } else if (migrate_colo()) {
         vm_start();
     } else {
         runstate_set(global_state_get_runstate());
@@ -517,6 +482,18 @@ process_incoming_migration_co(void *opaque)
     if (compress_threads_load_setup(mis->from_src_file)) {
         error_report("Failed to setup decompress threads");
         goto fail;
+    }
+
+    if (migrate_colo()) {
+        if (ram_block_discard_disable(true)) {
+            error_report("COLO: cannot disable RAM discard");
+            goto fail;
+        }
+
+        if (colo_init_ram_cache() < 0) {
+            error_report("Init ram cache failed");
+            goto fail;
+        }
     }
 
     mis->largest_page_size = qemu_ram_pagesize_largest();
@@ -1594,10 +1571,6 @@ static bool migrate_prepare(MigrationState *s, bool blk, bool blk_inc,
     }
 
     if (blk || blk_inc) {
-        if (migrate_colo()) {
-            error_setg(errp, "No disk migration is required in COLO mode");
-            return false;
-        }
         if (migrate_block() || migrate_block_incremental()) {
             error_setg(errp, "Command options are incompatible with "
                        "current migration capabilities");
@@ -2356,9 +2329,10 @@ static void migration_completion(MigrationState *s)
         goto fail;
     }
 
-    if (migrate_colo() && s->state == MIGRATION_STATUS_ACTIVE) {
+    if (migrate_colo()) {
         /* COLO does not support postcopy */
-        migrate_set_state(&s->state, MIGRATION_STATUS_ACTIVE,
+        assert(s->state != MIGRATION_STATUS_POSTCOPY_ACTIVE);
+        migrate_set_state(&s->state, current_active_state,
                           MIGRATION_STATUS_COLO);
     } else {
         migrate_set_state(&s->state, current_active_state,
@@ -2950,11 +2924,6 @@ static void *migration_thread(void *opaque)
          * early.
          */
         qemu_savevm_send_postcopy_advise(s->to_dst_file);
-    }
-
-    if (migrate_colo()) {
-        /* Notify migration destination that we enable COLO */
-        qemu_savevm_send_colo_enable(s->to_dst_file);
     }
 
     qemu_savevm_state_setup(s->to_dst_file);

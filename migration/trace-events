@@ -36,7 +36,6 @@ savevm_send_ping(uint32_t val) "0x%x"
 savevm_send_postcopy_listen(void) ""
 savevm_send_postcopy_run(void) ""
 savevm_send_postcopy_resume(void) ""
-savevm_send_colo_enable(void) ""
 savevm_send_recv_bitmap(char *name) "%s"
 savevm_state_setup(void) ""
 savevm_state_resume_prepare(void) ""
@@ -324,6 +323,8 @@ migration_tls_incoming_handshake_complete(void) ""
 colo_vm_state_change(const char *old, const char *new) "Change '%s' => '%s'"
 colo_send_message(const char *msg) "Send '%s' message"
 colo_receive_message(const char *msg) "Receive '%s' message"
+colo_need_migrate_ram_background(uint64_t pending_size) "Pending %" PRIu64 " dirty ram"
+colo_checkpoint_stats(uint64_t total, uint64_t message, uint64_t prep, uint64_t replication, uint64_t memory, uint64_t vmstate, uint64_t apply_mem, uint64_t apply_dev, uint64_t net_notify) "total %" PRIu64 " message %" PRIu64 " prep %" PRIu64 " replication %" PRIu64 " memory %" PRIu64 " vmstate %" PRIu64 " apply_mem %" PRIu64 " apply_dev %" PRIu64 " net_notify %" PRIu64
 
 # colo-failover.c
 colo_failover_set_state(const char *new_state) "new state %s"

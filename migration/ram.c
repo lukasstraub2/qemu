@@ -3021,17 +3021,17 @@ static int ram_save_setup(QEMUFile *f, void *opaque)
     RAMBlock *block;
     int ret;
 
+    assert(!migration_in_colo_state());
+
     if (compress_threads_save_setup()) {
         return -1;
     }
 
-    /* migration has already setup the bitmap, reuse it. */
-    if (!migration_in_colo_state()) {
-        if (ram_init_all(rsp) != 0) {
-            compress_threads_save_cleanup();
-            return -1;
-        }
+    if (ram_init_all(rsp) != 0) {
+        compress_threads_save_cleanup();
+        return -1;
     }
+
     (*rsp)->pss[RAM_CHANNEL_PRECOPY].pss_channel = f;
 
     WITH_RCU_READ_LOCK_GUARD() {
@@ -3285,7 +3285,8 @@ static void ram_state_pending_exact(void *opaque, uint64_t *must_precopy,
 
     uint64_t remaining_size = rs->migration_dirty_pages * TARGET_PAGE_SIZE;
 
-    if (!migration_in_postcopy() && remaining_size < s->threshold_size) {
+    if ((!migration_in_postcopy() && remaining_size < s->threshold_size) ||
+            migration_in_colo_state()) {
         qemu_mutex_lock_iothread();
         WITH_RCU_READ_LOCK_GUARD() {
             migration_bitmap_sync_precopy(rs, false);
@@ -3465,6 +3466,8 @@ static void colo_init_ram_state(void)
     ram_state_init(&ram_state);
 }
 
+static void colo_flush_threads_init(void);
+
 /*
  * colo cache: this is for secondary VM, we cache the whole
  * memory of the secondary VM, it is need to hold the global lock
@@ -3512,6 +3515,7 @@ int colo_init_ram_cache(void)
     }
 
     colo_init_ram_state();
+    colo_flush_threads_init();
     return 0;
 }
 
@@ -3802,16 +3806,121 @@ static bool postcopy_is_running(void)
     return ps >= POSTCOPY_INCOMING_LISTENING && ps < POSTCOPY_INCOMING_END;
 }
 
+struct FlushParams {
+    QemuThread thread;
+    QemuSemaphore sem;
+    QemuSemaphore wait_sem;
+    int part;
+    int num_threads;
+};
+
+struct FlushThreads {
+    int num_threads;
+    struct FlushParams* threads;
+};
+
+struct FlushThreads *colo_flush_threads;
+
+static void calc_offset_end(RAMBlock *block, int part, int num_threads,
+                           unsigned long *offset, unsigned long *end) {
+    unsigned long size, part_size;
+
+    size = block->used_length >> TARGET_PAGE_BITS;
+    part_size = size / num_threads;
+    *offset = part_size * part;
+    if (part == num_threads - 1) {
+        *end = size;
+    } else {
+        *end = *offset + part_size;
+    }
+}
 /*
  * Flush content of RAM cache into SVM's memory.
  * Only flush the pages that be dirtied by PVM or SVM or both.
  */
-void colo_flush_ram_cache(void)
+static void _colo_flush_ram_cache(int part, int num_threads)
 {
     RAMBlock *block = NULL;
     void *dst_host;
     void *src_host;
-    unsigned long offset = 0;
+
+    WITH_RCU_READ_LOCK_GUARD() {
+        block = QLIST_FIRST_RCU(&ram_list.blocks);
+
+        while (block) {
+            unsigned long offset, end;
+            calc_offset_end(block, part, num_threads, &offset, &end);
+
+            while (true) {
+                unsigned long num;
+                offset = colo_bitmap_find_dirty(ram_state, block, offset, &num);
+                if (!offset_in_ramblock(block,
+                        ((ram_addr_t)offset) << TARGET_PAGE_BITS) ||
+                        offset >= end
+                        ) {
+                    break;
+                } else {
+                    if (offset + num >= end) {
+                        num = end - offset;
+                    }
+
+                    assert(offset < end);
+                    assert(offset + num <= end);
+
+                    dst_host = block->host
+                             + (((ram_addr_t)offset) << TARGET_PAGE_BITS);
+                    src_host = block->colo_cache
+                             + (((ram_addr_t)offset) << TARGET_PAGE_BITS);
+                    memcpy(dst_host, src_host, TARGET_PAGE_SIZE * num);
+                    offset += num;
+                }
+            }
+
+            block = QLIST_NEXT_RCU(block, next);
+        }
+    }
+
+}
+
+static void *colo_flush_ram_cache_thread(void *opaque) {
+    struct FlushParams *params = opaque;
+
+    rcu_register_thread();
+    while (true) {
+        qemu_sem_wait(&params->sem);
+        barrier();
+        _colo_flush_ram_cache(params->part, params->num_threads);
+        qemu_sem_post(&params->wait_sem);
+    }
+
+    return NULL;
+}
+
+static void colo_flush_threads_init(void) {
+    int num_threads = migrate_colo_flush_threads();
+
+    colo_flush_threads = g_new0(struct FlushThreads, 1);
+    colo_flush_threads->num_threads = num_threads;
+    if (num_threads == 0) {
+        return;
+    }
+
+    colo_flush_threads->threads = g_new0(struct FlushParams, num_threads);
+
+    for (int n = 0; n < num_threads; n++) {
+        struct FlushParams *thread = &colo_flush_threads->threads[n];
+        qemu_sem_init(&thread->sem, 0);
+        qemu_sem_init(&thread->wait_sem, 0);
+        thread->part = n;
+        thread->num_threads = num_threads;
+        qemu_thread_create(&thread->thread, "flush thread",
+                           colo_flush_ram_cache_thread, thread,
+                           QEMU_THREAD_JOINABLE);
+    }
+}
+
+void colo_flush_ram_cache_begin(void) {
+    RAMBlock *block = NULL;
 
     memory_global_dirty_log_sync(false);
     qemu_mutex_lock(&ram_state->bitmap_mutex);
@@ -3822,31 +3931,56 @@ void colo_flush_ram_cache(void)
     }
 
     trace_colo_flush_ram_cache_begin(ram_state->migration_dirty_pages);
+
+    barrier();
+
+    int num_threads = colo_flush_threads->num_threads;
+    if (num_threads == 0) {
+        _colo_flush_ram_cache(0, 1);
+    } else {
+        for (int n = 0; n < num_threads; n++) {
+            struct FlushParams *thread = &colo_flush_threads->threads[n];
+            qemu_sem_post(&thread->sem);
+        }
+    }
+}
+
+void colo_flush_ram_cache_wait(void) {
+    RAMBlock *block = NULL;
+
+    int num_threads = colo_flush_threads->num_threads;
+    if (num_threads != 0) {
+        for (int n = 0; n < num_threads; n++) {
+            struct FlushParams *thread = &colo_flush_threads->threads[n];
+            qemu_sem_wait(&thread->wait_sem);
+        }
+    }
+
+    barrier();
+
     WITH_RCU_READ_LOCK_GUARD() {
         block = QLIST_FIRST_RCU(&ram_list.blocks);
 
         while (block) {
-            unsigned long num = 0;
-
-            offset = colo_bitmap_find_dirty(ram_state, block, offset, &num);
-            if (!offset_in_ramblock(block,
-                                    ((ram_addr_t)offset) << TARGET_PAGE_BITS)) {
-                offset = 0;
-                num = 0;
+            if (ramblock_is_ignored(block)) {
                 block = QLIST_NEXT_RCU(block, next);
-            } else {
-                unsigned long i = 0;
-
-                for (i = 0; i < num; i++) {
-                    migration_bitmap_clear_dirty(ram_state, block, offset + i);
-                }
-                dst_host = block->host
-                         + (((ram_addr_t)offset) << TARGET_PAGE_BITS);
-                src_host = block->colo_cache
-                         + (((ram_addr_t)offset) << TARGET_PAGE_BITS);
-                memcpy(dst_host, src_host, TARGET_PAGE_SIZE * num);
-                offset += num;
+                continue;
             }
+
+            unsigned long offset = 0, num = 0;
+            while (true) {
+                offset = colo_bitmap_find_dirty(ram_state, block, offset, &num);
+                if (!offset_in_ramblock(block,
+                        ((ram_addr_t)offset) << TARGET_PAGE_BITS)) {
+                    break;
+                } else {
+                    for (unsigned long i = 0; i < num; i++) {
+                        migration_bitmap_clear_dirty(ram_state, block, offset + i);
+                    }
+                }
+            }
+
+            block = QLIST_NEXT_RCU(block, next);
         }
     }
     qemu_mutex_unlock(&ram_state->bitmap_mutex);
@@ -3919,7 +4053,7 @@ static int ram_load_precopy(QEMUFile *f)
              * speed of the migration, but it obviously reduce the downtime of
              * back-up all SVM'S memory in COLO preparing stage.
              */
-            if (migration_incoming_colo_enabled()) {
+            if (migrate_colo()) {
                 if (migration_incoming_in_colo_state()) {
                     /* In COLO stage, put all pages into cache temporarily */
                     host = colo_cache_from_block_offset(block, addr, true);

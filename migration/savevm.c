@@ -774,6 +774,8 @@ int register_savevm_live(const char *idstr,
         se->is_ram = 1;
     }
 
+    assert(!(se->ops->save_setup && se->ops->save_state));
+
     pstrcat(se->idstr, sizeof(se->idstr), idstr);
 
     if (instance_id == VMSTATE_INSTANCE_ID_ANY) {
@@ -1035,12 +1037,6 @@ static void qemu_savevm_command_send(QEMUFile *f,
     qemu_fflush(f);
 }
 
-void qemu_savevm_send_colo_enable(QEMUFile *f)
-{
-    trace_savevm_send_colo_enable();
-    qemu_savevm_command_send(f, MIG_CMD_ENABLE_COLO, 0, NULL);
-}
-
 void qemu_savevm_send_ping(QEMUFile *f, uint32_t value)
 {
     uint32_t buf;
@@ -1187,6 +1183,20 @@ bool qemu_savevm_state_blocked(Error **errp)
     QTAILQ_FOREACH(se, &savevm_state.handlers, entry) {
         if (se->vmsd && se->vmsd->unmigratable) {
             error_setg(errp, "State blocked by non-migratable device '%s'",
+                       se->idstr);
+            return true;
+        }
+
+        if (se->ops && se->ops->save_setup && migrate_colo()) {
+            if (!strcmp(se->idstr, "ram")) {
+                continue;
+            }
+
+            if (se->ops->is_active && !se->ops->is_active(se->opaque)) {
+                continue;
+            }
+
+            error_setg(errp, "COLO doesn't support iterable device '%s'",
                        se->idstr);
             return true;
         }
@@ -2300,19 +2310,6 @@ static int loadvm_handle_recv_bitmap(MigrationIncomingState *mis,
     return 0;
 }
 
-static int loadvm_process_enable_colo(MigrationIncomingState *mis)
-{
-    int ret = migration_incoming_enable_colo();
-
-    if (!ret) {
-        ret = colo_init_ram_cache();
-        if (ret) {
-            migration_incoming_disable_colo();
-        }
-    }
-    return ret;
-}
-
 /*
  * Process an incoming 'QEMU_VM_COMMAND'
  * 0           just a normal return
@@ -2395,7 +2392,7 @@ static int loadvm_process_command(QEMUFile *f)
         return loadvm_handle_recv_bitmap(mis, len);
 
     case MIG_CMD_ENABLE_COLO:
-        return loadvm_process_enable_colo(mis);
+        return 0;
     }
 
     return 0;
