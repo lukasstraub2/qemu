@@ -75,6 +75,8 @@ ssize_t qemu_netfilter_pass_to_next(NetClientState *sender,
 
     if (!sender || !sender->peer) {
         /* no receiver, or sender been deleted, no need to pass it further */
+        trace_net_drop_packet("qemu_netfilter_pass_to_next",
+                              "no receiver or sender has been deleted");
         goto out;
     }
 
@@ -113,11 +115,12 @@ ssize_t qemu_netfilter_pass_to_next(NetClientState *sender,
     if (sender && sender->peer) {
         qemu_net_queue_send_iov(sender->peer->incoming_queue,
                                 sender, flags, iov, iovcnt, NULL);
+    } else {
+        trace_net_drop_packet("qemu_netfilter_pass_to_next",
+                              "no receiver or sender has been deleted");
     }
 out:
     /* no receiver, or sender been deleted */
-    trace_net_drop_packet("qemu_netfilter_pass_to_next",
-                          "no receiver or sender has been deleted");
     return iov_size(iov, iovcnt);
 }
 
