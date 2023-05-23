@@ -235,7 +235,7 @@ static void filter_buffer_colo_class_init(ObjectClass *oc, void *data)
 
 static const TypeInfo filter_buffer_colo_info = {
     .name = TYPE_FILTER_BUFFER_COLO,
-    .parent = TYPE_NETFILTER,
+    .parent = TYPE_FILTER_BUFFER,
     .class_init = filter_buffer_colo_class_init,
     .instance_size = sizeof(FilterBufferState),
 };
