@@ -3821,24 +3821,44 @@ struct FlushThreads {
 
 struct FlushThreads *colo_flush_threads;
 
-static void calc_offset_end(RAMBlock *block, int part, int num_threads,
-                           unsigned long *offset, unsigned long *end) {
+static bool get_chunk(RAMBlock *block, int thread, int num_threads,
+                     unsigned long *offset, unsigned long *end) {
     unsigned long size, part_size;
-
     size = block->used_length >> TARGET_PAGE_BITS;
-    part_size = size / num_threads;
-    *offset = part_size * part;
-    if (part == num_threads - 1) {
-        *end = size;
+    part_size = (16*1024*1024UL) >> TARGET_PAGE_BITS;
+
+    if (num_threads == 1) {
+        if (*end == 0) {
+            *offset = 0;
+            *end = size;
+            return true;
+        }
+        return false;
+    }
+
+    if (*end == 0) {
+        *offset = thread * part_size;
+        *end = *offset + part_size;
     } else {
+        *offset += num_threads * part_size;
         *end = *offset + part_size;
     }
+
+    if (*offset >= size) {
+        return false;
+    }
+
+    if (*end > size) {
+        *end = size;
+    }
+
+    return true;
 }
 /*
  * Flush content of RAM cache into SVM's memory.
  * Only flush the pages that be dirtied by PVM or SVM or both.
  */
-static void _colo_flush_ram_cache(int part, int num_threads)
+static void _colo_flush_ram_cache(int thread, int num_threads)
 {
     RAMBlock *block = NULL;
     void *dst_host;
@@ -3848,31 +3868,34 @@ static void _colo_flush_ram_cache(int part, int num_threads)
         block = QLIST_FIRST_RCU(&ram_list.blocks);
 
         while (block) {
-            unsigned long offset, end;
-            calc_offset_end(block, part, num_threads, &offset, &end);
+            if (!block->host || !block->used_length) {
+                block = QLIST_NEXT_RCU(block, next);
+                continue;
+            }
 
-            while (true) {
-                unsigned long num;
-                offset = colo_bitmap_find_dirty(ram_state, block, offset, &num);
-                if (!offset_in_ramblock(block,
-                        ((ram_addr_t)offset) << TARGET_PAGE_BITS) ||
-                        offset >= end
-                        ) {
-                    break;
-                } else {
-                    if (offset + num >= end) {
-                        num = end - offset;
+            unsigned long chunk_offset = 0, offset = 0, end = 0;
+            while (get_chunk(block, thread, num_threads, &chunk_offset, &end)) {
+                offset = chunk_offset;
+                while (true) {
+                    unsigned long num;
+                    offset = colo_bitmap_find_dirty(ram_state, block, offset, &num);
+                    if (offset >= end) {
+                        break;
+                    } else {
+                        if (offset + num >= end) {
+                            num = end - offset;
+                        }
+
+                        assert(offset < end);
+                        assert(offset + num <= end);
+
+                        dst_host = block->host
+                                 + (((ram_addr_t)offset) << TARGET_PAGE_BITS);
+                        src_host = block->colo_cache
+                                 + (((ram_addr_t)offset) << TARGET_PAGE_BITS);
+                        memcpy(dst_host, src_host, TARGET_PAGE_SIZE * num);
+                        offset += num;
                     }
-
-                    assert(offset < end);
-                    assert(offset + num <= end);
-
-                    dst_host = block->host
-                             + (((ram_addr_t)offset) << TARGET_PAGE_BITS);
-                    src_host = block->colo_cache
-                             + (((ram_addr_t)offset) << TARGET_PAGE_BITS);
-                    memcpy(dst_host, src_host, TARGET_PAGE_SIZE * num);
-                    offset += num;
                 }
             }
 
