@@ -117,14 +117,17 @@ GSourceFuncs progress_source_funcs = {
     NULL, NULL
 };
 
-gint progress_source_add(GSourceFunc func, gpointer data) {
+guint progress_source_add(GSourceFunc func, gpointer data) {
     GMainContext *context = g_main_context_default();
     GSource *source;
+    guint source_id;
 
     source = g_source_new(&progress_source_funcs, sizeof(GSource));
     g_source_set_priority(source, G_PRIORITY_DEFAULT_IDLE);
     g_source_set_callback(source, func, data, NULL);
-    return g_source_attach(source, context);
+    source_id = g_source_attach(source, context);
+    g_source_unref(source);
+    return source_id;
 }
 
 GIOChannel *colod_create_channel(int fd, GError **errp) {
@@ -238,4 +241,59 @@ void colod_callback_clear(ColodCallbackHead *head) {
         QLIST_REMOVE(cb, next);
         g_free(cb);
     }
+}
+
+const char *colod_source_name_or_null(GSource *source) {
+    const char *ret;
+
+    if (!source) {
+        return "NULL";
+    }
+
+    ret = g_source_get_name(source);
+    return (ret? ret : "NULL");
+}
+
+void _colod_assert_remove_one_source(gpointer data, const gchar *func,
+                                     int line) {
+    GMainContext *mainctx = g_main_context_default();
+    char *first_source;
+    GSource *tmp;
+
+    tmp = g_main_context_find_source_by_user_data(mainctx, data);
+    if (!tmp) {
+        return;
+    }
+
+    first_source = g_strdup(colod_source_name_or_null(tmp));
+    assert(g_source_remove_by_user_data(data));
+
+    tmp = g_main_context_find_source_by_user_data(mainctx, data);
+    if (!tmp) {
+        g_free(first_source);
+        return;
+    }
+
+    gboolean print_header = TRUE;
+    while (TRUE) {
+        tmp = g_main_context_find_source_by_user_data(mainctx, data);
+        if (!tmp) {
+            break;
+        }
+
+        const char *source = colod_source_name_or_null(tmp);
+        if (print_header) {
+            fprintf(stderr,
+                    "%s:%u: More than one source: first source: \"%s\", "
+                    "additional source: \"%s\"\n",
+                    func, line, first_source, source);
+            print_header = FALSE;
+        } else {
+            fprintf(stderr, "%s:%u: Even more sources: \"%s\"\n",
+                    func, line, source);
+        }
+        assert(g_source_remove_by_user_data(data));
+    }
+
+    abort();
 }

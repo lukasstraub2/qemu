@@ -10,8 +10,10 @@
 #ifndef BASE_TYPES_H
 #define BASE_TYPES_H
 
+typedef struct ColodMainCoroutine ColodMainCoroutine;
 typedef struct ColodClientListener ColodClientListener;
 typedef struct ColodQmpState ColodQmpState;
 typedef struct ColodWatchdog ColodWatchdog;
+typedef struct Cpg Cpg;
 
 #endif // BASE_TYPES_H

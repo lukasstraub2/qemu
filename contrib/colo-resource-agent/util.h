@@ -19,6 +19,7 @@ typedef enum ColodError {
     COLOD_ERROR_FATAL,
     COLOD_ERROR_TIMEOUT,
     COLOD_ERROR_QMP,
+    COLOD_ERROR_EOF,
     COLOD_ERROR_INTERRUPT
 } ColodError;
 
@@ -38,7 +39,7 @@ int os_daemonize_post_init(int pipe, GError **errp);
 
 int colod_unix_connect(gchar *path, GError **errp);
 int colod_fd_set_blocking(int fd, gboolean blocking, GError **errp);
-gint progress_source_add(GSourceFunc func, gpointer data);
+guint progress_source_add(GSourceFunc func, gpointer data);
 GIOChannel *colod_create_channel(int fd, GError **errp);
 void colod_shutdown_channel(GIOChannel *channel);
 
@@ -68,5 +69,11 @@ void colod_callback_add(ColodCallbackHead *head,
 void colod_callback_del(ColodCallbackHead *head,
                         ColodCallbackFunc func, gpointer user_data);
 void colod_callback_clear(ColodCallbackHead *head);
+
+const char *colod_source_name_or_null(GSource *source);
+#define colod_assert_remove_one_source(data) \
+    _colod_assert_remove_one_source((data), __func__, __LINE__)
+void _colod_assert_remove_one_source(gpointer data, const gchar *func,
+                                     int line);
 
 #endif // UTIL_H

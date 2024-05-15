@@ -10,25 +10,25 @@
 #ifndef COROUTINE_H
 #define COROUTINE_H
 
+#include <stdlib.h>
+
 #define CO co->
 
 #define co_begin(yield_type, yield_ret) \
-    unsigned int *coroutine_line = \
-        &(coroutine->stack[coroutine->stack_index].line); \
     yield_type coroutine_yield_ret = (yield_ret); \
-    switch(*coroutine_line) { case 0:;
+    switch(coroutine->frame->line) { default: abort(); case 0:;
 
 #define co_end }
 
 #define _co_yield(value) \
         do { \
-            *coroutine_line=__LINE__; \
+            coroutine->frame->line = __LINE__; \
             return (value); case __LINE__:; \
         } while (0)
 
 #define _co_yieldV \
         do { \
-            *coroutine_line=__LINE__; \
+            coroutine->frame->line = __LINE__; \
             return; case __LINE__:; \
         } while (0)
 

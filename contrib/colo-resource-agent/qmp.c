@@ -33,9 +33,11 @@ struct ColodQmpState {
     JsonNode *yank_instances;
     ColodCallbackHead yank_callbacks;
     ColodCallbackHead event_callbacks;
+    ColodCallbackHead hup_callbacks;
     gboolean did_yank;
     GError *error;
     guint inflight;
+    guint hup_source_id;
 };
 
 static void qmp_set_error(ColodQmpState *state, GError *error) {
@@ -74,22 +76,34 @@ void qmp_add_notify_event(ColodQmpState *state, QmpEventCallback _func,
     colod_callback_add(&state->event_callbacks, func, user_data);
 }
 
-void qmp_add_notify_yank(ColodQmpState *state, QmpYankCallback _func,
-                         gpointer user_data) {
-    ColodCallbackFunc func = (ColodCallbackFunc) _func;
-    colod_callback_add(&state->yank_callbacks, func, user_data);
-}
-
 void qmp_del_notify_event(ColodQmpState *state, QmpEventCallback _func,
                           gpointer user_data) {
     ColodCallbackFunc func = (ColodCallbackFunc) _func;
     colod_callback_del(&state->event_callbacks, func, user_data);
 }
 
+void qmp_add_notify_yank(ColodQmpState *state, QmpYankCallback _func,
+                         gpointer user_data) {
+    ColodCallbackFunc func = (ColodCallbackFunc) _func;
+    colod_callback_add(&state->yank_callbacks, func, user_data);
+}
+
 void qmp_del_notify_yank(ColodQmpState *state, QmpYankCallback _func,
                          gpointer user_data) {
     ColodCallbackFunc func = (ColodCallbackFunc) _func;
     colod_callback_del(&state->yank_callbacks, func, user_data);
+}
+
+void qmp_add_notify_hup(ColodQmpState *state, QmpYankCallback _func,
+                        gpointer user_data) {
+    ColodCallbackFunc func = (ColodCallbackFunc) _func;
+    colod_callback_add(&state->hup_callbacks, func, user_data);
+}
+
+void qmp_del_notify_hup(ColodQmpState *state, QmpYankCallback _func,
+                        gpointer user_data) {
+    ColodCallbackFunc func = (ColodCallbackFunc) _func;
+    colod_callback_del(&state->hup_callbacks, func, user_data);
 }
 
 static void notify_event(ColodQmpState *state, ColodQmpResult *result) {
@@ -103,6 +117,14 @@ static void notify_event(ColodQmpState *state, ColodQmpResult *result) {
 static void notify_yank(ColodQmpState *state) {
     ColodCallback *entry, *next_entry;
     QLIST_FOREACH_SAFE(entry, &state->yank_callbacks, next, next_entry) {
+        QmpYankCallback func = (QmpYankCallback) entry->func;
+        func(entry->user_data);
+    }
+}
+
+static void notify_hup(ColodQmpState *state) {
+    ColodCallback *entry, *next_entry;
+    QLIST_FOREACH_SAFE(entry, &state->hup_callbacks, next, next_entry) {
         QmpYankCallback func = (QmpYankCallback) entry->func;
         func(entry->user_data);
     }
@@ -140,53 +162,49 @@ ColodQmpResult *qmp_parse_result(gchar *line, gsize len, GError **errp) {
     return result;
 }
 
-#define qmp_read_line_co(ret, state, channel, yank, skip_events, errp) \
-    co_call_co((ret), _qmp_read_line_co, (state), (channel), (yank), \
-               (skip_events), (errp))
-
+#define qmp_read_line_co(...) \
+    co_wrap(_qmp_read_line_co(__VA_ARGS__))
 static ColodQmpResult *_qmp_read_line_co(Coroutine *coroutine,
                                          ColodQmpState *state,
                                          QmpChannel *channel,
                                          gboolean yank,
                                          gboolean skip_events,
                                          GError **errp) {
-    ColodQmpCo *co = co_stack(qmpco);
+    struct {
+        gchar *line;
+        gsize len;
+    } *co;
     ColodQmpResult *result;
     int ret;
     GError *local_errp = NULL;
 
+    co_frame(co, sizeof(*co));
     co_begin(ColodQmpResult *, NULL);
 
     while (TRUE) {
-        colod_channel_read_line_timeout_co(ret, channel->channel, &CO line,
-                                           &CO len, state->timeout,
-                                           &local_errp);
-        if (ret == G_IO_STATUS_ERROR) {
+        co_recurse(ret = colod_channel_read_line_timeout_co(coroutine,
+                            channel->channel, &CO line, &CO len,
+                            state->timeout, &local_errp));
+        if (ret < 0) {
             log_error(local_errp->message);
             if (g_error_matches(local_errp, COLOD_ERROR, COLOD_ERROR_TIMEOUT)) {
                 if (yank) {
                     g_error_free(local_errp);
                     local_errp = NULL;
 
-                    qmp_yank_co(ret, state, &local_errp);
+                    co_recurse(ret = qmp_yank_co(coroutine, state, &local_errp));
                     if (ret < 0) {
-                        colod_trace("%s:%u: ", __func__, __LINE__,
+                        colod_trace("%s:%u: %s\n", __func__, __LINE__,
                                     local_errp->message);
                         g_propagate_error(errp, local_errp);
                         return NULL;
                     }
-                    qmp_read_line_co(result, state, channel, FALSE, skip_events,
-                                     errp);
+                    co_recurse(result = qmp_read_line_co(coroutine, state, channel,
+                                                         FALSE, skip_events, errp));
                     return result;
                 }
             }
             g_propagate_error(errp, local_errp);
-            return NULL;
-        }
-        if (ret != G_IO_STATUS_NORMAL) {
-            colod_trace("%s:%u: Qmp signaled EOF\n", __func__, __LINE__);
-            g_set_error(errp, COLOD_ERROR, COLOD_ERROR_FATAL,
-                        "Qmp signaled EOF");
             return NULL;
         }
 
@@ -206,6 +224,10 @@ static ColodQmpResult *_qmp_read_line_co(Coroutine *coroutine,
                 notify_event(state, result);
             }
             qmp_result_free(result);
+            if (!channel->discard_events) {
+                g_idle_add(coroutine->cb.plain, coroutine);
+                co_yield_int(G_SOURCE_REMOVE);
+            }
             continue;
         }
 
@@ -217,10 +239,8 @@ static ColodQmpResult *_qmp_read_line_co(Coroutine *coroutine,
     return result;
 }
 
-#define ___qmp_execute_co(ret, state, channel, yank, errp, command) \
-    co_call_co((ret), __qmp_execute_co, (state), (channel), (yank), (errp), \
-               (command))
-
+#define ___qmp_execute_co(...) \
+    co_wrap(__qmp_execute_co(__VA_ARGS__))
 static ColodQmpResult *__qmp_execute_co(Coroutine *coroutine,
                                         ColodQmpState *state,
                                         QmpChannel *channel,
@@ -228,7 +248,7 @@ static ColodQmpResult *__qmp_execute_co(Coroutine *coroutine,
                                         GError **errp,
                                         const gchar *command) {
     ColodQmpResult *result;
-    GIOStatus ret;
+    int ret;
     GError *local_errp = NULL;
 
     co_begin(ColodQmpResult *, NULL);
@@ -236,21 +256,11 @@ static ColodQmpResult *__qmp_execute_co(Coroutine *coroutine,
     state->inflight++;
     colod_lock_co(channel->lock);
     colod_trace("%s", command);
-    colod_channel_write_timeout_co(ret, channel->channel, command,
-                                   strlen(command), state->timeout,
-                                   &local_errp);
-    if (ret == G_IO_STATUS_ERROR) {
-        colod_trace("%s:%u: ", __func__, __LINE__, local_errp->message);
-        qmp_set_error(state, local_errp);
-        g_propagate_prefixed_error(errp, local_errp, "qmp: ");
-        colod_unlock_co(channel->lock);
-        state->inflight--;
-        return NULL;
-    }
-    if (ret != G_IO_STATUS_NORMAL) {
-        local_errp = g_error_new(COLOD_ERROR, COLOD_ERROR_FATAL,
-                                 "Qmp signaled EOF");
-        colod_trace("%s:%u: ", __func__, __LINE__, local_errp->message);
+    co_recurse(ret = colod_channel_write_timeout_co(coroutine, channel->channel,
+                                   command, strlen(command), state->timeout,
+                                   &local_errp));
+    if (ret < 0) {
+        colod_trace("%s:%u: %s\n", __func__, __LINE__, local_errp->message);
         qmp_set_error(state, local_errp);
         g_propagate_prefixed_error(errp, local_errp, "qmp: ");
         colod_unlock_co(channel->lock);
@@ -258,7 +268,8 @@ static ColodQmpResult *__qmp_execute_co(Coroutine *coroutine,
         return NULL;
     }
 
-    qmp_read_line_co(result, state, channel, yank, TRUE, &local_errp);
+    co_recurse(result = qmp_read_line_co(coroutine, state, channel, yank, TRUE,
+                                         &local_errp));
     colod_unlock_co(channel->lock);
     state->inflight--;
     if (!result) {
@@ -338,13 +349,17 @@ static gchar *pick_yank_instances(JsonNode *result,
 
 int _qmp_yank_co(Coroutine *coroutine, ColodQmpState *state,
                  GError **errp) {
-    ColodQmpCo *co = co_stack(qmpco);
+    struct {
+        gchar *command;
+    } *co;
     ColodQmpResult *result;
 
+    co_frame(co, sizeof(*co));
     co_begin(int, -1);
 
-    ___qmp_execute_co(result, state, &state->yank_channel, FALSE, errp,
-                      "{'exec-oob': 'query-yank', 'id': 'yank0'}\n");
+    co_recurse(result = ___qmp_execute_co(coroutine, state, &state->yank_channel,
+                               FALSE, errp,
+                               "{'exec-oob': 'query-yank', 'id': 'yank0'}\n"));
     if (!result) {
         return -1;
     }
@@ -363,8 +378,8 @@ int _qmp_yank_co(Coroutine *coroutine, ColodQmpState *state,
     g_free(instances);
     qmp_result_free(result);
 
-    ___qmp_execute_co(result, state, &state->yank_channel, FALSE, errp,
-                      CO command);
+    co_recurse(result = ___qmp_execute_co(coroutine, state, &state->yank_channel,
+                                          FALSE, errp, CO command));
     if (!result) {
         g_free(CO command);
         return -1;
@@ -398,13 +413,12 @@ static gboolean qmp_handshake_readable_co(gpointer data) {
     Coroutine *coroutine = &qmpco->coroutine;
     gboolean ret;
 
-    co_enter(ret, coroutine, _qmp_handshake_readable_co);
+    co_enter(coroutine, ret = _qmp_handshake_readable_co(coroutine));
     if (coroutine->yield) {
         return GPOINTER_TO_INT(coroutine->yield_value);
     }
 
-    g_source_remove_by_user_data(coroutine);
-    assert(!g_source_remove_by_user_data(coroutine));
+    colod_assert_remove_one_source(coroutine);
     qmpco->state->inflight--;
     g_free(coroutine);
     return ret;
@@ -425,11 +439,11 @@ static gboolean _qmp_handshake_readable_co(Coroutine *coroutine) {
 
     co_begin(gboolean, G_SOURCE_CONTINUE);
 
-    qmp_read_line_co(result, qmp, qmpco->channel, FALSE, TRUE,
-                     &local_errp);
+    co_recurse(result = qmp_read_line_co(coroutine, qmp, qmpco->channel,
+                                         FALSE, TRUE, &local_errp));
     if (!result) {
         colod_unlock_co(qmpco->channel->lock);
-        colod_trace("%s:%u: ", __func__, __LINE__, local_errp->message);
+        colod_trace("%s:%u: %s\n", __func__, __LINE__, local_errp->message);
         qmp_set_error(qmp, local_errp);
         g_error_free(local_errp);
         return G_SOURCE_REMOVE;
@@ -437,9 +451,9 @@ static gboolean _qmp_handshake_readable_co(Coroutine *coroutine) {
     colod_trace("%s", result->line);
     qmp_result_free(result);
 
-    ___qmp_execute_co(result, qmp, qmpco->channel, FALSE, &local_errp,
-                      "{'execute': 'qmp_capabilities', "
-                      "'arguments': {'enable': ['oob']}}\n");
+    co_recurse(result = ___qmp_execute_co(coroutine, qmp, qmpco->channel, FALSE, &local_errp,
+                                          "{'execute': 'qmp_capabilities', "
+                                          "'arguments': {'enable': ['oob']}}\n"));
     colod_unlock_co(qmpco->channel->lock);
     if (!result) {
         qmp_set_error(qmp, local_errp);
@@ -449,7 +463,7 @@ static gboolean _qmp_handshake_readable_co(Coroutine *coroutine) {
     if (has_member(result->json_root, "error")) {
         local_errp = g_error_new(COLOD_ERROR, COLOD_ERROR_FATAL,
                                  "qmp_capabilities: %s", result->line);
-        colod_trace("%s:%u: ", __func__, __LINE__, local_errp->message);
+        colod_trace("%s:%u: %s\n", __func__, __LINE__, local_errp->message);
         qmp_set_error(qmp, local_errp);
         g_error_free(local_errp);
         qmp_result_free(result);
@@ -478,8 +492,7 @@ static Coroutine *qmp_handshake_coroutine(ColodQmpState *state,
     channel->lock.count = 1;
     channel->lock.holder = coroutine;
 
-    g_io_add_watch(channel->channel, G_IO_IN | G_IO_HUP,
-                   qmp_handshake_readable_co_wrap, coroutine);
+    g_idle_add(qmp_handshake_readable_co, coroutine);
 
     state->inflight++;
     return coroutine;
@@ -497,17 +510,22 @@ static void qmp_wait_event_cb(gpointer data, ColodQmpResult *result) {
 
     if (object_matches(result->json_root, state->match)) {
         state->fired = TRUE;
-        g_idle_add(state->coroutine->cb.plain, state->coroutine);
+        g_idle_add_full(G_PRIORITY_HIGH, state->coroutine->cb.plain,
+                        state->coroutine, NULL);
         qmp_del_notify_event(state->state, qmp_wait_event_cb, state);
     }
 }
 
 int _qmp_wait_event_co(Coroutine *coroutine, ColodQmpState *state,
                        guint timeout, const gchar *match, GError **errp) {
-    ColodQmpCo *co = co_stack(qmpco);
+    struct {
+        ColodWaitState *wait_state;
+        guint timeout_source_id;
+    } *co;
     JsonNode *parsed;
     int ret = 0;
 
+    co_frame(co, sizeof(*co));
     co_begin(int, -1);
 
     parsed = json_from_string(match, NULL);
@@ -556,13 +574,12 @@ static gboolean qmp_event_co(gpointer data) {
     Coroutine *coroutine = &qmpco->coroutine;
     gboolean ret;
 
-    co_enter(ret, coroutine, _qmp_event_co);
+    co_enter(coroutine, ret = _qmp_event_co(coroutine));
     if (coroutine->yield) {
         return GPOINTER_TO_INT(coroutine->yield_value);
     }
 
-    g_source_remove_by_user_data(coroutine);
-    assert(!g_source_remove_by_user_data(coroutine));
+    colod_assert_remove_one_source(coroutine);
     qmpco->state->inflight--;
     g_free(qmpco);
     return ret;
@@ -584,7 +601,7 @@ static gboolean _qmp_event_co(Coroutine *coroutine) {
     co_begin(gboolean, G_SOURCE_CONTINUE);
 
     while (TRUE) {
-        g_io_add_watch_full(channel->channel, G_PRIORITY_LOW,
+        g_io_add_watch_full(channel->channel, G_PRIORITY_DEFAULT_IDLE,
                             G_IO_IN | G_IO_HUP, qmp_event_co_wrap, coroutine,
                             NULL);
         co_yield_int(G_SOURCE_REMOVE);
@@ -594,17 +611,18 @@ static gboolean _qmp_event_co(Coroutine *coroutine) {
         }
         colod_lock_co(channel->lock);
 
-        qmp_read_line_co(result, qmpco->state, channel, FALSE, FALSE,
-                         &local_errp);
+        co_recurse(result = qmp_read_line_co(coroutine, qmpco->state, channel,
+                                             FALSE, FALSE, &local_errp));
         colod_unlock_co(channel->lock);
         if (!result) {
+            colod_trace("%s:%u: %s\n", __func__, __LINE__, local_errp->message);
             qmp_set_error(qmpco->state, local_errp);
             return G_SOURCE_REMOVE;
         }
         if (!has_member(result->json_root, "event")) {
             local_errp = g_error_new(COLOD_ERROR, COLOD_ERROR_FATAL,
                                      "Not an event: %s", result->line);
-            colod_trace("%s:%u: ", __func__, __LINE__, local_errp->message);
+            colod_trace("%s:%u: %s\n", __func__, __LINE__, local_errp->message);
             qmp_set_error(qmpco->state, local_errp);
             g_error_free(local_errp);
             local_errp = NULL;
@@ -623,6 +641,17 @@ static gboolean _qmp_event_co(Coroutine *coroutine) {
     return G_SOURCE_REMOVE;
 }
 
+static gboolean qmp_hup_cb(G_GNUC_UNUSED GIOChannel *channel,
+                           G_GNUC_UNUSED GIOCondition revents,
+                           gpointer data) {
+    ColodQmpState *state = data;
+
+    notify_hup(state);
+
+    state->hup_source_id = 0;
+    return G_SOURCE_REMOVE;
+}
+
 static Coroutine *qmp_event_coroutine(ColodQmpState *state,
                                       QmpChannel *channel) {
     QmpCoroutine *qmpco;
@@ -635,15 +664,18 @@ static Coroutine *qmp_event_coroutine(ColodQmpState *state,
     qmpco->state = state;
     qmpco->channel = channel;
 
-    g_io_add_watch_full(channel->channel, G_PRIORITY_LOW, G_IO_IN | G_IO_HUP,
-                        qmp_event_co_wrap, coroutine, NULL);
+    g_io_add_watch_full(channel->channel, G_PRIORITY_DEFAULT_IDLE,
+                        G_IO_IN | G_IO_HUP, qmp_event_co_wrap, coroutine,
+                        NULL);
 
     state->inflight++;
     return coroutine;
 }
 
 guint qmp_hup_source(ColodQmpState *state, GIOFunc func, gpointer data) {
-    return g_io_add_watch(state->channel.channel, G_IO_HUP, func, data);
+    guint id = g_io_add_watch(state->channel.channel, G_IO_HUP, func, data);
+    g_source_set_name_by_id(id, "qmp hup source");
+    return id;
 }
 
 void qmp_set_yank_instances(ColodQmpState *state, JsonNode *instances) {
@@ -660,8 +692,13 @@ void qmp_set_timeout(ColodQmpState *state, guint timeout) {
 }
 
 void qmp_free(ColodQmpState *state) {
+    if (state->hup_source_id) {
+        g_source_remove(state->hup_source_id);
+    }
+
     colod_callback_clear(&state->event_callbacks);
     colod_callback_clear(&state->yank_callbacks);
+    colod_callback_clear(&state->hup_callbacks);
 
     colod_shutdown_channel(state->yank_channel.channel);
     colod_shutdown_channel(state->channel.channel);
@@ -675,18 +712,18 @@ void qmp_free(ColodQmpState *state) {
     g_free(state);
 }
 
-ColodQmpState *qmp_new(int fd1, int fd2, guint timeout, GError **errp) {
+ColodQmpState *qmp_new(int fd, int yank_fd, guint timeout, GError **errp) {
     ColodQmpState *state;
 
     state = g_new0(ColodQmpState, 1);
     state->timeout = timeout;
-    state->channel.channel = colod_create_channel(fd1, errp);
+    state->channel.channel = colod_create_channel(fd, errp);
     if (!state->channel.channel) {
         g_free(state);
         return NULL;
     }
 
-    state->yank_channel.channel = colod_create_channel(fd2, errp);
+    state->yank_channel.channel = colod_create_channel(yank_fd, errp);
     state->yank_channel.discard_events = TRUE;
     if (!state->yank_channel.channel) {
         g_io_channel_unref(state->channel.channel);
@@ -698,6 +735,9 @@ ColodQmpState *qmp_new(int fd1, int fd2, guint timeout, GError **errp) {
     qmp_handshake_coroutine(state, &state->yank_channel);
     qmp_event_coroutine(state, &state->channel);
     qmp_event_coroutine(state, &state->yank_channel);
+
+    state->hup_source_id = g_io_add_watch(state->channel.channel, G_IO_HUP,
+                                          qmp_hup_cb, state);
 
     return state;
 }

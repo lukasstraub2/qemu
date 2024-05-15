@@ -14,11 +14,6 @@
 
 #include "coroutine.h"
 
-typedef struct CoroutineUtilCo {
-    guint timeout_source_id, io_source_id;
-    gsize offset;
-} CoroutineUtilCo;
-
 typedef struct CoroutineLock {
     Coroutine *holder;
     unsigned int count;
@@ -49,44 +44,38 @@ typedef struct CoroutineLock {
         } \
     } while(0)
 
-#define colod_channel_read_line_timeout_co(ret, channel, line, len, timeout, \
-                                           errp) \
-    co_call_co((ret), _colod_channel_read_line_timeout_co, \
-               (channel), (line), (len), (timeout), (errp))
+#define colod_channel_read_line_timeout_co(...) \
+    co_wrap(_colod_channel_read_line_timeout_co(__VA_ARGS__))
 
-#define colod_channel_read_line_co(ret, channel, line, len, errp) \
-    co_call_co((ret), _colod_channel_read_line_co, \
-               (channel), (line), (len), (errp))
+#define colod_channel_read_line_co(...) \
+    co_wrap(_colod_channel_read_line_co(__VA_ARGS__))
 
-#define colod_channel_write_timeout_co(ret, channel, buf, len, timeout, \
-                                       errp) \
-    co_call_co((ret), _colod_channel_write_timeout_co, \
-               (channel), (buf), (len), (timeout), (errp))
+#define colod_channel_write_timeout_co(...) \
+    co_wrap(_colod_channel_write_timeout_co(__VA_ARGS__))
 
-#define colod_channel_write_co(ret, channel, buf, len, errp) \
-    co_call_co((ret), _colod_channel_write_co, \
-               (channel), (buf), (len), (errp))
+#define colod_channel_write_co(...) \
+    co_wrap(_colod_channel_write_co(__VA_ARGS__))
 
-GIOStatus _colod_channel_read_line_timeout_co(Coroutine *coroutine,
-                                              GIOChannel *channel,
-                                              gchar **line,
-                                              gsize *len,
-                                              guint timeout,
-                                              GError **errp);
+int _colod_channel_read_line_timeout_co(Coroutine *coroutine,
+                                        GIOChannel *channel,
+                                        gchar **line,
+                                        gsize *len,
+                                        guint timeout,
+                                        GError **errp);
 
-GIOStatus _colod_channel_read_line_co(Coroutine *coroutine,
-                                      GIOChannel *channel, gchar **line,
-                                      gsize *len, GError **errp);
+int _colod_channel_read_line_co(Coroutine *coroutine,
+                                GIOChannel *channel, gchar **line,
+                                gsize *len, GError **errp);
 
-GIOStatus _colod_channel_write_timeout_co(Coroutine *coroutine,
-                                          GIOChannel *channel,
-                                          const gchar *buf,
-                                          gsize len,
-                                          guint timeout,
-                                          GError **errp);
+int _colod_channel_write_timeout_co(Coroutine *coroutine,
+                                    GIOChannel *channel,
+                                    const gchar *buf,
+                                    gsize len,
+                                    guint timeout,
+                                    GError **errp);
 
-GIOStatus _colod_channel_write_co(Coroutine *coroutine,
-                                  GIOChannel *channel, const gchar *buf,
-                                  gsize len, GError **errp);
+int _colod_channel_write_co(Coroutine *coroutine,
+                            GIOChannel *channel, const gchar *buf,
+                            gsize len, GError **errp);
 
 #endif // COUTIL_H

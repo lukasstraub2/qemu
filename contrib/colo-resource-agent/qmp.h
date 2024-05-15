@@ -26,58 +26,49 @@ typedef struct ColodQmpResult {
     gsize len;
 } ColodQmpResult;
 
-typedef struct ColodQmpCo {
-    gchar *line;
-    union {
-        gsize len;
-        guint timeout_source_id;
-    };
-    union {
-        gchar *command;
-        ColodWaitState *wait_state;
-    };
-    ColodQmpResult *result;
-} ColodQmpCo;
-
 typedef void (*QmpYankCallback)(gpointer user_data);
 typedef void (*QmpEventCallback)(gpointer user_data, ColodQmpResult *event);
 
 void qmp_result_free(ColodQmpResult *result);
 ColodQmpResult *qmp_parse_result(gchar *line, gsize len, GError **errp);
 
-ColodQmpState *qmp_new(int fd1, int fd2, guint timeout, GError **errp);
+ColodQmpState *qmp_new(int fd, int yank_fd, guint timeout, GError **errp);
 void qmp_free(ColodQmpState *state);
 
-#define qmp_execute_co(ret, state, errp, command) \
-    co_call_co((ret), _qmp_execute_co, (state), (errp), (command))
+#define qmp_execute_co(...) \
+    co_wrap(_qmp_execute_co(__VA_ARGS__))
 ColodQmpResult *_qmp_execute_co(Coroutine *coroutine,
                                 ColodQmpState *state,
                                 GError **errp,
                                 const gchar *command);
 
-#define qmp_execute_nocheck_co(ret, state, errp, command) \
-    co_call_co((ret), _qmp_execute_nocheck_co, (state), (errp), (command))
+#define qmp_execute_nocheck_co(...) \
+    co_wrap(_qmp_execute_nocheck_co(__VA_ARGS__))
 ColodQmpResult *_qmp_execute_nocheck_co(Coroutine *coroutine,
                                         ColodQmpState *state,
                                         GError **errp,
                                         const gchar *command);
 
-#define qmp_yank_co(ret, state, errp) \
-    co_call_co((ret), _qmp_yank_co, (state), (errp))
+#define qmp_yank_co(...) \
+    co_wrap(_qmp_yank_co(__VA_ARGS__))
 int _qmp_yank_co(Coroutine *coroutine, ColodQmpState *state,
                  GError **errp);
 
 void qmp_add_notify_event(ColodQmpState *state, QmpEventCallback _func,
                           gpointer user_data);
-void qmp_add_notify_yank(ColodQmpState *state, QmpYankCallback _func,
-                         gpointer user_data);
 void qmp_del_notify_event(ColodQmpState *state, QmpEventCallback _func,
                           gpointer user_data);
+void qmp_add_notify_yank(ColodQmpState *state, QmpYankCallback _func,
+                         gpointer user_data);
 void qmp_del_notify_yank(ColodQmpState *state, QmpYankCallback _func,
                          gpointer user_data);
+void qmp_add_notify_hup(ColodQmpState *state, QmpYankCallback _func,
+                        gpointer user_data);
+void qmp_del_notify_hup(ColodQmpState *state, QmpYankCallback _func,
+                        gpointer user_data);
 
-#define qmp_wait_event_co(ret, state, timeout, match, errp) \
-    co_call_co((ret), _qmp_wait_event_co, (state), (timeout), (match), (errp))
+#define qmp_wait_event_co(...) \
+    co_wrap(_qmp_wait_event_co(__VA_ARGS__))
 int _qmp_wait_event_co(Coroutine *coroutine, ColodQmpState *state,
                        guint timeout, const gchar *match, GError **errp);
 

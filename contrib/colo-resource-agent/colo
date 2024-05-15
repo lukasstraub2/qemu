@@ -77,7 +77,7 @@ OCF_RESKEY_advanced_config_default = "{}"
 OCF_RESKEY_listen_address_default = "0.0.0.0"
 OCF_RESKEY_host_map_default = "{}"
 OCF_RESKEY_base_port_default = "9000"
-OCF_RESKEY_max_disk_errors_default = "1"
+OCF_RESKEY_monitor_interface_default = ""
 OCF_RESKEY_low_yank_timeout_default = "1000"
 OCF_RESKEY_high_yank_timeout_default = "20000"
 OCF_RESKEY_debug_default = "0"
@@ -92,7 +92,7 @@ OCF_RESKEY_advanced_config = os.getenv("OCF_RESKEY_advanced_config", OCF_RESKEY_
 OCF_RESKEY_listen_address = os.getenv("OCF_RESKEY_listen_address", OCF_RESKEY_listen_address_default)
 OCF_RESKEY_host_map = os.getenv("OCF_RESKEY_host_map", OCF_RESKEY_host_map_default)
 OCF_RESKEY_base_port = os.getenv("OCF_RESKEY_base_port", OCF_RESKEY_base_port_default)
-OCF_RESKEY_max_disk_errors = os.getenv("OCF_RESKEY_max_disk_errors", OCF_RESKEY_max_disk_errors_default)
+OCF_RESKEY_monitor_interface = os.getenv("OCF_RESKEY_monitor_interface", OCF_RESKEY_monitor_interface_default)
 OCF_RESKEY_low_yank_timeout = os.getenv("OCF_RESKEY_low_yank_timeout", OCF_RESKEY_low_yank_timeout_default)
 OCF_RESKEY_high_yank_timeout = os.getenv("OCF_RESKEY_high_yank_timeout", OCF_RESKEY_high_yank_timeout_default)
 OCF_RESKEY_debug = os.getenv("OCF_RESKEY_debug", OCF_RESKEY_debug_default)
@@ -166,6 +166,7 @@ def qemu_secondary_cmdline(config):
         "server=on,wait=off,nodelay=on"
         " -object filter-redirector,id=mirror0,netdev=hn0,queue=tx,"
         "indev=mirror0"
+        " -object filter-drop,id=drop0,netdev=hn0,queue=rx"
         " -object filter-redirector,id=comp_sec_in0,netdev=hn0,queue=rx,"
         "outdev=comp_sec_in0") \
         % (OCF_RESKEY_qemu_binary, config["qemu-options-str"],
@@ -212,6 +213,9 @@ def colod_cmdline():
 
     if int(OCF_RESKEY_debug) >= 1:
         cmdline += " --trace"
+
+    if OCF_RESKEY_monitor_interface:
+        cmdline += " -m " + OCF_RESKEY_monitor_interface
 
     return cmdline
 
@@ -356,15 +360,10 @@ Example:
         <content type="integer" default=\"""" + OCF_RESKEY_base_port_default + """\"/>
     </parameter>
 
-    <parameter name="max_disk_errors" unique="0" required="0">
-        <longdesc lang="en">
-Maximum disk read errors per monitor interval before marking the resource
-as failed. A write error is always fatal except if the value is 0.
-A value of 0 will disable disk error handling.
-Primary disk errors are only handled if there is a healthy secondary.
-        </longdesc>
-        <shortdesc lang="en">Maximum disk errors</shortdesc>
-        <content type="integer" default=\"""" + OCF_RESKEY_max_disk_errors_default + """\"/>
+    <parameter name="monitor_interface" unique="0" required="0">
+        <longdesc lang="en">interface to monitor</longdesc>
+        <shortdesc lang="en">monitor interface</shortdesc>
+        <content type="string" default=\"""" + OCF_RESKEY_monitor_interface_default + """\"/>
     </parameter>
 
     <parameter name="low_yank_timeout" unique="0" required="0">
@@ -495,10 +494,6 @@ def qemu_colo_validate_all():
     # Check resource parameters
     if not str.isdigit(OCF_RESKEY_base_port):
         log.error("base_port needs to be a number")
-        return OCF_ERR_CONFIGURED
-
-    if not str.isdigit(OCF_RESKEY_max_disk_errors):
-        log.error("max_disk_errors needs to be a number")
         return OCF_ERR_CONFIGURED
 
     if not str.isdigit(OCF_RESKEY_low_yank_timeout):
@@ -815,7 +810,7 @@ def qmp_cancel_resync(fd):
         ])
 
 def qmp_setup_colod(fd):
-    qmp_update_store(fd, {"peer": None, "pretend-secondary": False})
+    qmp_update_store(fd, {"pretend-secondary": False})
 
     qmp_execute(fd, [
         {"exec-colod": "set-yank", "instances": [
@@ -824,7 +819,7 @@ def qmp_setup_colod(fd):
             {"type": "chardev", "id": "comp_sec_in0"},
             {"type": "migration"}]},
 
-        {"exec-colod": "set-migration", "commands": [
+        {"exec-colod": "set-migration-switchover", "commands": [
             {"execute": "qom-set", "arguments": {"path": "/objects/mirror0", "property": "status", "value": "on"}},
             {"execute": "qom-set", "arguments": {"path": "/objects/comp_pri_in0", "property": "status", "value": "on"}}]},
 
@@ -847,10 +842,12 @@ def qmp_setup_colod(fd):
             {"execute": "chardev-remove", "arguments": {"id": "comp_out0"}}]},
 
         {"exec-colod": "set-secondary-failover", "commands": [
+            {"execute": "qom-set", "arguments": {"path": "/objects/drop0", "property": "status", "value": "off"}},
             {"execute": "qom-set", "arguments": {"path": "/objects/comp_sec_in0", "property": "status", "value": "off"}},
             {"execute": "nbd-server-stop"},
             {"execute": "x-colo-lost-heartbeat"},
             {"execute": "object-del", "arguments": {"id": "mirror0"}},
+            {"execute": "object-del", "arguments": {"id": "drop0"}},
             {"execute": "object-del", "arguments": {"id": "comp_sec_in0"}},
             {"execute": "chardev-remove", "arguments": {"id": "mirror0"}},
             {"execute": "chardev-remove", "arguments": {"id": "comp_sec_in0"}}]}
@@ -903,43 +900,44 @@ def qmp_start_migration(fd, peer):
         ])
 
     # Connect mirror and compare_in to secondary
-    qmp_execute(fd, [
+    commands = [
         {"execute": "chardev-add", "arguments": {"id": "comp_pri_in0..", "backend": {"type": "socket", "data": {"addr": {"type": "unix", "data": {"path": str(COMP_PRI_SOCK)}}, "server": True}}}},
         {"execute": "chardev-add", "arguments": {"id": "comp_pri_in0", "backend": {"type": "socket", "data": {"addr": {"type": "unix", "data": {"path": str(COMP_PRI_SOCK)}}, "server": False}}}},
         {"execute": "chardev-add", "arguments": {"id": "comp_out0..", "backend": {"type": "socket", "data": {"addr": {"type": "unix", "data": {"path": str(COMP_OUT_SOCK)}}, "server": True}}}},
         {"execute": "chardev-add", "arguments": {"id": "comp_out0", "backend": {"type": "socket", "data": {"addr": {"type": "unix", "data": {"path": str(COMP_OUT_SOCK)}}, "server": False}}}},
         {"execute": "chardev-add", "arguments": {"id": "mirror0", "backend": {"type": "socket", "data": {"addr": {"type": "inet", "data": {"host": str(ip), "port": str(mirror_port())}}, "server": False, "nodelay": True }}}},
         {"execute": "chardev-add", "arguments": {"id": "comp_sec_in0", "backend": {"type": "socket", "data": {"addr": {"type": "inet", "data": {"host": str(ip), "port": str(compare_in_port())}}, "server": False, "nodelay": True }}}}
-        ])
+            ]
 
     # Add the COLO filters
     vnet_hdr_support = config["vnet-hdr"]
     if have_filter_rewriter:
-        qmp_execute(fd, [
+        commands += [
             {"execute": "object-add", "arguments": {"qom-type": "filter-mirror", "id": "mirror0", "status": "off", "insert": "before", "position": "id=rew0", "netdev": "hn0", "queue": "tx", "outdev": "mirror0", "vnet_hdr_support": vnet_hdr_support}},
             {"execute": "object-add", "arguments": {"qom-type": "filter-redirector", "id": "comp_out0", "insert": "before", "position": "id=rew0", "netdev": "hn0", "queue": "rx", "indev": "comp_out0..", "vnet_hdr_support": vnet_hdr_support}},
             {"execute": "object-add", "arguments": {"qom-type": "filter-redirector", "id": "comp_pri_in0", "status": "off", "insert": "before", "position": "id=rew0", "netdev": "hn0", "queue": "rx", "outdev": "comp_pri_in0..", "vnet_hdr_support": vnet_hdr_support}}
-            ])
+            ]
     else:
-        qmp_execute(fd, [
+        commands += [
             {"execute": "object-add", "arguments": {"qom-type": "filter-mirror", "id": "mirror0", "status": "off", "netdev": "hn0", "queue": "tx", "outdev": "mirror0", "vnet_hdr_support": vnet_hdr_support}},
             {"execute": "object-add", "arguments": {"qom-type": "filter-redirector", "id": "comp_out0", "netdev": "hn0", "queue": "rx", "indev": "comp_out0..", "vnet_hdr_support": vnet_hdr_support}},
             {"execute": "object-add", "arguments": {"qom-type": "filter-redirector", "id": "comp_pri_in0", "status": "off", "netdev": "hn0", "queue": "rx", "outdev": "comp_pri_in0..", "vnet_hdr_support": vnet_hdr_support}}
-            ])
+            ]
 
     colo_compare_options = config["colo-compare-options"]
     colo_compare_arguments = {"qom-type": "colo-compare", "id": "comp0", "primary_in": "comp_pri_in0", "secondary_in": "comp_sec_in0", "outdev": "comp_out0", "iothread": "iothread1", "vnet_hdr_support": vnet_hdr_support}
     colo_compare_arguments.update(colo_compare_options)
-    qmp_execute(fd, [
+    commands += [
         {"execute": "object-add", "arguments": {"qom-type": "iothread", "id": "iothread1"}},
-        {"execute": "object-add", "arguments": colo_compare_arguments}
-        ])
+        {"execute": "object-add", "arguments": colo_compare_arguments},
+        {"execute": "migrate", "arguments": {"uri": "tcp:%s:%s" % (ip, migrate_port())}}
+        ]
 
     # Start migration
     qmp_migrate_settings(fd, config)
     qmp_execute(fd, [
-        {"exec-colod": "start-migration"},
-        {"execute": "migrate", "arguments": {"uri": "tcp:%s:%s" % (ip, migrate_port())}}
+        {"exec-colod": "set-migration-start", "commands": commands},
+        {"exec-colod": "start-migration"}
         ])
 
 def qmp_query_status(fd):
@@ -947,6 +945,9 @@ def qmp_query_status(fd):
 
 def qmp_query_store(fd):
     return qmp_execute(fd, [{"exec-colod": "query-store"}])["return"]
+
+def qmp_query_peer(fd):
+    return qmp_execute(fd, [{"exec-colod": "query-peer"}])["return"]["peer"]
 
 def qmp_update_store(fd, update):
     store = qmp_query_store(fd)
@@ -978,19 +979,18 @@ def check_running_pid():
     return pid_running(QEMU_PIDFILE) or pid_running(COLOD_PIDFILE)
 
 def new_peer(fd, peer):
-    if qmp_query_store(fd)["peer"]:
+    if qmp_query_peer(fd):
         return
 
     qmp_start_resync(fd, peer)
-    qmp_update_store(fd, {"peer": peer})
-    qmp_execute(fd, [{"exec-colod": "clear-peer-status"}])
+    qmp_execute(fd, [{"exec-colod": "set-peer", "peer": peer}])
     # The secondary has inconsistent data until resync is finished
     set_remote_master_score(peer, 0)
 
 def del_peer(fd):
     if qmp_check_resync(fd):
         qmp_cancel_resync(fd)
-    qmp_update_store(fd, {"peer": None})
+    qmp_execute(fd, [{"exec-colod": "clear-peer"}])
 
 def qemu_colo_monitor():
     running = check_running_pid()
@@ -1011,18 +1011,18 @@ def qemu_colo_monitor():
             if block_job:
                 if "error" in block_job:
                     log.error("resync error: %s" % block_job["error"])
-                    peer = qmp_query_store(fd)["peer"]
+                    peer = qmp_query_peer(fd)
                     del_peer(fd)
                     report_remote_failure(peer)
 
                 elif status["peer-failed"]:
-                    peer = qmp_query_store(fd)["peer"]
+                    peer = qmp_query_peer(fd)
                     del_peer(fd)
                     report_remote_failure(peer)
 
                 elif block_job["ready"]:
                     log.info("resync done, starting migration")
-                    peer = qmp_query_store(fd)["peer"]
+                    peer = qmp_query_peer(fd)
                     qmp_start_migration(fd, peer)
 
                 else:
@@ -1286,10 +1286,11 @@ def qemu_colo_notify():
         if not env_do_shutdown_guest() \
            and (status["primary"] or status["replication"]) \
            and HOSTNAME != str.strip(OCF_RESKEY_CRM_meta_notify_stop_uname):
+            peer = str.strip(OCF_RESKEY_CRM_meta_notify_stop_uname)
             fd = qmp_open()
-            peer = qmp_query_store(fd)["peer"]
-            log.debug("our peer: %s" % peer)
-            if peer == str.strip(OCF_RESKEY_CRM_meta_notify_stop_uname):
+            our_peer = qmp_query_peer(fd)
+            log.debug("our peer: %s" % our_peer)
+            if peer == our_peer:
                 del_peer(fd)
             fd.close()
 
@@ -1298,6 +1299,12 @@ def qemu_colo_notify():
          and (status["primary"] or status["replication"]):
         peer = str.strip(OCF_RESKEY_CRM_meta_notify_stop_uname)
         set_remote_master_score(peer, 0)
+        fd = qmp_open()
+        our_peer = qmp_query_peer(fd)
+        log.debug("our peer: %s" % our_peer)
+        if peer == our_peer:
+            del_peer(fd)
+        fd.close()
 
     return OCF_SUCCESS
 
